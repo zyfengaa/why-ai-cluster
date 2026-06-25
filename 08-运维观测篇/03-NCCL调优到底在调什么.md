@@ -232,8 +232,8 @@ NCCL 调优解决了"通信不高效"的问题。但还有一个更难发现、�
 ---
 
 > **参考资料**：
-> - "NCCL Tuning for Multi-GPU LLM Training" — Spheron (2026)
-> - "NCCL-tests in practice — mandatory pre-launch health check" — Alya (2026)
-> - "NCCL Debugging & Tuning" — Rajat Pandit (2026)
-> - NCCL 官方文档 (NVIDIA, 2026)
-> - "NCCL Topology Dump and Tuning on Kubernetes" — K8s Recipes (2026)
+> - [NCCL Tuning for Multi-GPU LLM Training: Environment Variables, Topology, and Cloud Guide (2026)](https://www.spheron.network/blog/nccl-tuning-multi-gpu-llm-training-2026/) — Spheron (2026)
+> - [NCCL-tests in practice — the mandatory pre-launch health check](https://docs.alayanew.com/en/docs/tech-blog/2026-05-06-nccl-tests) — Alya (2026)
+> - [NCCL Debugging & Tuning: NCCL_ALGO (Ring, Tree, CollNet)](https://rajatpandit.com/ai-engineering/debugging-nccl-ring-failures/) — Rajat Pandit (2026)
+> - [NCCL 官方文档](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/) (NVIDIA, 2026)
+> - [NCCL Topology Dump and Tuning on Kubernetes](https://kubernetes.recipes/recipes/ai/nccl-topology-dump-tuning-kubernetes/) — K8s Recipes (2026)

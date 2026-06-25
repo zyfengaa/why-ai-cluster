@@ -256,8 +256,8 @@ NCCL_DEBUG=INFO mpirun -np 8 all_reduce_perf -b 256M -e 256M 2>&1 | grep "NCCL I
 ---
 
 > **参考资料**：
-> - AMD & OEHI: "Benchmarking Ethernet Interconnect for AI/HPC Workloads" (2025)
-> - IBM Research: "Designing RoCE Networks for AI Workloads" (UCICS 2026)
+> - [AMD & OEHI: "Benchmarking Ethernet Interconnect for AI/HPC Workloads" (2025)](https://rocm.blogs.amd.com/)
+> - [IBM Research: "Designing RoCE Networks for AI Workloads" (UCICS 2026)](https://research.ibm.com/)
 > - 某云厂商 RoCE 集群事故报告（国内技术会议分享，2024）
-> - NVIDIA NCCL 文档：环境变量参考 (docs.nvidia.com)
-> - "Comparative Analysis of Scale-Out RoCE Network Traffic Patterns" — AMD ROCm Blog (2025)
+> - [NVIDIA NCCL 文档：环境变量参考](https://docs.nvidia.com/deeplearning/nccl/)
+> - [AMD ROCm Blog: "Comparative Analysis of Scale-Out RoCE Network Traffic Patterns" (2025)](https://rocm.blogs.amd.com/)

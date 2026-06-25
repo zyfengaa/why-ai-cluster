@@ -211,6 +211,6 @@ mpirun -np N --hostfile hosts all_reduce_perf -b 256M -e 512M -f 2
 
 > **参考资料**：
 > - xAI Grok 4.0 集群规格（公开报道，2025）
-> - Meta: "Llama 3 训练基础设施" 技术博文 (2024)
+> - [Meta: "The Llama 3 Herd of Models" 技术报告 (2024)](https://ai.meta.com/research/publications/the-llama-3-herd-of-models/)
 > - 一个真实案例：某公司 1,200 卡 RoCE 集群运维报告（来自网络会议分享，2024）
-> - Epoch AI 关于万卡集群故障频率的分析 (2025)
+> - [Epoch AI 关于万卡集群故障频率的分析 (2025)](https://epochai.org/)

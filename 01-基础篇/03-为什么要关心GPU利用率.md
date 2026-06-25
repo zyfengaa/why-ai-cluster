@@ -168,6 +168,6 @@ nsys profile -o profile_output python train.py
 ---
 
 > **参考资料**：
-> - Chowdhery et al., "PaLM: Scaling Language Modeling with Pathways" (2022) — 首次提出 MFU
-> - Google DeepMind 对 MFU 的深入讨论 (2024)
-> - 2026 年分布式训练深度分析报告 — 各框架 MFU 实测对比
+> - [Chowdhery et al., "PaLM: Scaling Language Modeling with Pathways" (2022)](https://arxiv.org/abs/2204.02311) — 首次提出 MFU
+> - [Google DeepMind 对 MFU 的深入讨论 (2024)](https://deepmind.google/research/)
+> - [2026 年分布式训练深度分析报告 — 各框架 MFU 实测对比](https://www.semianalysis.com/)

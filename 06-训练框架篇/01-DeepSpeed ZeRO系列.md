@@ -164,7 +164,7 @@ ZeRO 和模型并行是什么关系？是竞争、互补、还是结合使用？
 ---
 
 > **参考资料**：
-> - Rajbhandari et al., "ZeRO: Memory Optimizations Toward Training Trillion Parameter Models" (2020)
-> - Rajbhandari et al., "ZeRO-Infinity: Breaking the GPU Memory Wall for Extreme Scale Deep Learning" (2021)
-> - DeepSpeed 官方文档 (deepspeed.ai)
-> - ZeRO++: "Extremely Efficient Collective Communication for Giant Model Training" (2023)
+> - [Rajbhandari et al., "ZeRO: Memory Optimizations Toward Training Trillion Parameter Models" (2020)](https://arxiv.org/abs/1910.02054)
+> - [Rajbhandari et al., "ZeRO-Infinity: Breaking the GPU Memory Wall for Extreme Scale Deep Learning" (2021)](https://arxiv.org/abs/2104.07857)
+> - [DeepSpeed 官方文档](https://www.deepspeed.ai/)
+> - [Wang et al., "ZeRO++: Extremely Efficient Collective Communication for Giant Model Training" (2023)](https://arxiv.org/abs/2306.10209)

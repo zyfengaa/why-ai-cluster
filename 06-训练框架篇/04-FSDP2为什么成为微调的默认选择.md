@@ -143,7 +143,7 @@ FSDP2 适合微调和小规模训练。DeepSpeed 适合内存受限场景。Mega
 ---
 
 > **参考资料**：
-> - FSDP2 技术说明 (PyTorch 2.5+)
-> - TorchTitan: Meta 的 FSDP2+TP+float8 参考实现 (2026)
-> - "FSDP2 for 100B+ Models: Multi-Node Deep Dive" (techbytes, 2026)
-> - Spheron: "Distributed LLM Training on GPU Cloud: FSDP vs DeepSpeed vs Megatron" (2026)
+> - [FSDP2 技术说明 (PyTorch 2.5+)](https://pytorch.org/docs/stable/fsdp.html)
+> - [TorchTitan: Meta 的 FSDP2+TP+float8 参考实现](https://github.com/pytorch/torchtitan)
+> - ["FSDP2 for 100B+ Models: Multi-Node Deep Dive" (techbytes, 2026)](https://techbytes.com/)
+> - [Spheron: "Distributed LLM Training on GPU Cloud: FSDP vs DeepSpeed vs Megatron" (2026)](https://www.spheron.network/blog/)

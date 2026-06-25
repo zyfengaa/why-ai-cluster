@@ -162,7 +162,7 @@ scontrol show config | grep -i gang
 ---
 
 > **参考资料**：
-> - TOP500 榜单 ([top500.org](https://top500.org))
-> - NVIDIA DGX SuperPOD 白皮书 (nvidia.com)
-> - Google TPU v4: "Efficient and Scalable Training of Large Models" (2023)
-> - Meta 关于 Llama 3 训练基础设施的技术博文 (2024)
+> - [TOP500 榜单](https://top500.org)
+> - [NVIDIA DGX SuperPOD 白皮书](https://www.nvidia.com/en-us/data-center/dgx-superpod/)
+> - [Google TPU v4: "An Optically Reconfigurable Supercomputer for Machine Learning" (ISCA 2023)](https://arxiv.org/abs/2304.01433)
+> - [Meta 关于 Llama 3 训练基础设施的技术博文 (2024)](https://ai.meta.com/research/publications/the-llama-3-herd-of-models/)

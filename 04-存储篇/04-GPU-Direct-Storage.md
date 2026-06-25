@@ -180,6 +180,6 @@ GDS 让数据加载变得更快，但还有一个更大的挑战：**训练过�
 ---
 
 > **参考资料**：
-> - NVIDIA GPUDirect Storage 官方文档 (docs.nvidia.com)
-> - WEKA GDS 基准测试 (weka.io)
-> - PyTorch Distributed Checkpoint + GDS (pytorch.org)
+> - [NVIDIA GPUDirect Storage 官方文档](https://docs.nvidia.com/gpudirect-storage/)
+> - [WEKA GDS 基准测试](https://www.weka.io/)
+> - [PyTorch Distributed Checkpoint + GDS](https://pytorch.org/docs/stable/distributed.checkpoint.html)

@@ -206,8 +206,8 @@ NVIDIA 收购 SchedMD（Slurm 的母公司）后，开源了 **Slinky（Slurm on
 ---
 
 > **参考资料**：
-> - "Kubernetes vs SLURM for AI Workloads" — Shakti Cloud (2026)
-> - "Why the top AI labs run Kubernetes on bare metal" — Spectro Cloud (2026)
-> - "Slurm vs. Kubernetes in the Age of AI" — HPCwire (2026)
-> - NVIDIA GPU Operator 文档 (2026)
-> - KAI Scheduler 文档 (2026)
+> - [Shakti Cloud: "Kubernetes vs SLURM for AI Workloads" (2026)](https://shakti.cloud/)
+> - [Spectro Cloud: "Why the top AI labs run Kubernetes on bare metal" (2026)](https://www.spectrocloud.com/)
+> - ["Slurm vs. Kubernetes in the Age of AI" — HPCwire (2026)](https://www.hpcwire.com/)
+> - [NVIDIA GPU Operator 文档](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/)
+> - [KAI Scheduler 文档](https://github.com/NVIDIA/KAI-Scheduler)

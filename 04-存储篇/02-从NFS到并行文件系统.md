@@ -198,7 +198,7 @@ load_time = time.time() - t0
 ---
 
 > **参考资料**：
-> - OpenSFS: Lustre 维基百科 (wiki.opensfs.org)
-> - WEKA: "High-Performance Storage Complete Guide 2025"
-> - IBM Spectrum Scale 官方文档
-> - BeeGFS 官网 (beegfs.io)
+> - [OpenSFS: Lustre 维基百科](https://wiki.opensfs.org/)
+> - [WEKA: "High-Performance Storage Complete Guide 2025"](https://www.weka.io/)
+> - [IBM Spectrum Scale 官方文档](https://www.ibm.com/products/spectrum-scale)
+> - [BeeGFS 官网](https://www.beegfs.io/)

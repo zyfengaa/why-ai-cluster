@@ -224,7 +224,7 @@ ncu --query-metrics python train.py 2>&1 | grep -E "Memory|Compute|Latency"
 ---
 
 > **参考资料**：
-> - NVIDIA Nsight Systems 用户指南 (2026)
-> - NVIDIA Nsight Compute 用户指南 (2026)
-> - PyTorch Profiler 文档 (2026)
-> - "Profiling and Optimization for LLM Training" — NVIDIA Developer Blog (2026)
+> - [NVIDIA Nsight Systems 用户指南](https://developer.nvidia.com/nsight-systems) (2026)
+> - [NVIDIA Nsight Compute 用户指南](https://developer.nvidia.com/nsight-compute) (2026)
+> - [PyTorch Profiler 文档](https://pytorch.org/tutorials/recipes/recipes/profiler_recipe.html) (2026)
+> - [Profiling and Optimization for LLM Training](https://developer.nvidia.com/blog/tag/training-ai-models/) — NVIDIA Developer Blog (2026)

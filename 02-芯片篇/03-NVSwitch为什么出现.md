@@ -193,6 +193,6 @@ NVLink/NVSwitch 最高做到 256 卡全互联（通过二级交换），但 1,00
 ---
 
 > **参考资料**：
-> - NVIDIA NVSwitch 官方介绍 (nvidia.com)
-> - DGX SuperPOD 架构白皮书 (nvidia.com)
-> - Hot Chips 2022: NVIDIA NVSwitch 3 演示
+> - [NVIDIA NVSwitch 官方介绍](https://www.nvidia.com/en-us/data-center/nvswitch/)
+> - [DGX SuperPOD 架构白皮书](https://www.nvidia.com/en-us/data-center/dgx-superpod/)
+> - [Hot Chips 2022: NVIDIA NVSwitch 3 演示](https://www.servethehome.com/nvidia-nvlink4-nvswitch-at-hot-chips-34/)

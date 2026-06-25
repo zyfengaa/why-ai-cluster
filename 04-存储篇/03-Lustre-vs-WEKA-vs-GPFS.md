@@ -185,8 +185,8 @@ dd if=/path/to/dataset/file of=/dev/null bs=1M count=10000
 ---
 
 > **参考资料**：
-> - Spheron: "Parallel File Systems for AI on GPU Cloud" (2026.05)
-> - WEKA 完整指南 (youngju.dev, 2026.03)
-> - Lustre 维基百科 (wiki.opensfs.org)
-> - Google Cloud: Managed Lustre for RL Training (2026)
-> - NCP-AII 存储系统指南 (flashgenius.net, 2026)
+> - [Spheron: "Parallel File Systems for AI on GPU Cloud" (2026.05)](https://www.spheron.network/blog/parallel-file-systems-ai-gpu-cloud-wekaio-lustre-beegfs-guide/)
+> - [WEKA 完整指南 (youngju.dev, 2026.03)](https://youngju.dev/)
+> - [Lustre 维基百科](https://wiki.opensfs.org/)
+> - [Google Cloud: Managed Lustre for RL Training (2026)](https://cloud.google.com/)
+> - [NCP-AII 存储系统指南 (flashgenius.net, 2026)](https://flashgenius.net/)

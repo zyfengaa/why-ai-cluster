@@ -172,7 +172,7 @@ HBM 太贵、容量有限，即使堆到 288 GB，T 级参数的模型还是放�
 ---
 
 > **参考资料**：
-> - JEDEC HBM3 标准 (jedec.org)
-> - Samsung / SK Hynix HBM3e 产品规格
-> - CoWoS 封装技术介绍 (TSMC)
-> - "HBM 与 GPU 封装技术" — Chiplet & Advanced Packaging 行业报告 (2025)
+> - [JEDEC HBM3 标准 (jedec.org)](https://www.jedec.org/standards-documents/docs/jesd238b01)
+> - [Samsung / SK Hynix HBM3e 产品规格](https://semiconductor.samsung.com/hbm/)
+> - [CoWoS 封装技术介绍 (TSMC)](https://www.tsmc.com/english/dedicatedFoundry/technology/cowos.htm)
+> - [Chiplet & Advanced Packaging 行业报告 (2025)](https://www.yolegroup.com/) — "HBM 与 GPU 封装技术"

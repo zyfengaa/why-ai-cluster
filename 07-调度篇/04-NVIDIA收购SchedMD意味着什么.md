@@ -207,8 +207,8 @@ nvidia-smi dmon -s puct -d 30
 ---
 
 > **参考资料**：
-> - "NVIDIA Acquires SchedMD" — 官方公告 (2025)
-> - "Slurm vs. Kubernetes in the Age of AI" — HPCwire (2026)
-> - CoreWeave SUNK 文档 (docs.coreweave.com)
-> - Slinky 项目 — SchedMD/NVIDIA (2025-2026)
-> - "Slurm on Crusoe Managed Kubernetes" — Crusoe (2026)
+> - ["NVIDIA Acquires SchedMD" — 官方公告 (2025)](https://nvidia.com/)
+> - ["Slurm vs. Kubernetes in the Age of AI" — HPCwire (2026)](https://www.hpcwire.com/)
+> - [CoreWeave SUNK 文档](https://docs.coreweave.com/products/sunk/)
+> - [Slinky 项目 — SchedMD/NVIDIA (2025-2026)](https://github.com/)
+> - [Crusoe: "Slurm on Crusoe Managed Kubernetes" (2026)](https://www.crusoe.ai/resources/blog/slurm-on-crusoe-managed-kubernetes-how-we-built-managed-gpu-training-infrastructure)

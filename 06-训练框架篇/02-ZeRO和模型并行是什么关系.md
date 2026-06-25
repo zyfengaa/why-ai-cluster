@@ -124,7 +124,7 @@ else:
 ---
 
 > **参考资料**：
-> - Rajbhandari et al., "ZeRO: Memory Optimization..." (2020)
-> - Shoeybi et al., "Megatron-LM: Training Multi-Billion..." (2019)
-> - "ZeRO + TP: A Practical Guide" — DeepSpeed 文档
-> - FSDP2 与 TP 组合实践 (PyTorch 2.5+)
+> - [Rajbhandari et al., "ZeRO: Memory Optimizations Toward Training Trillion Parameter Models" (2020)](https://arxiv.org/abs/1910.02054)
+> - [Shoeybi et al., "Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism" (2019)](https://arxiv.org/abs/1909.08053)
+> - ["ZeRO + TP: A Practical Guide" — DeepSpeed 文档](https://www.deepspeed.ai/)
+> - [FSDP2 与 TP 组合实践 (PyTorch 2.5+)](https://pytorch.org/docs/stable/fsdp.html)

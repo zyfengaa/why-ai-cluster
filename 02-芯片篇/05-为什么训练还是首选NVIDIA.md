@@ -165,8 +165,8 @@ NVIDIA 的生态优势意味着：**即使 AMD/华为的硬件有竞争力，202
 ---
 
 > **参考资料**：
-> - MLPerf Training v4.0 / v5.0 基准对比 ([mlcommons.org](https://mlcommons.org))
-> - AMD ROCm 6.0 发布说明 (amd.com)
-> - 华为昇腾产品页面 (huawei.com)
-> - "NVIDIA vs AMD for AI: The Real Story" — SemiAnalysis (2025)
+> - [MLPerf Training v4.0 / v5.0 基准对比](https://mlcommons.org)
+> - [AMD ROCm 6.0 发布说明](https://rocm.docs.amd.com/en/docs-6.0.0/about/release-notes.html)
+> - [华为昇腾产品页面](https://www.huawei.com/)
+> - [SemiAnalysis: "NVIDIA vs AMD for AI: The Real Story" (2025)](https://semianalysis.com/)
 > - 2026 年各 GPU 厂商 Benchmark 实测对比报告

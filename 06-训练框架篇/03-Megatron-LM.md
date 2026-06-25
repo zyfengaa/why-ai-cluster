@@ -122,7 +122,7 @@ Megatron-Core 是"重装"，FSDP2 就是"轻骑"。对于大多数微调场景�
 ---
 
 > **参考资料**：
-> - Shoeybi et al., "Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism" (2019)
-> - NVIDIA Megatron-Core 官方文档 (github.com/NVIDIA/Megatron-LM)
-> - "MoE Parallel Folding" — Megatron-Core MoE 论文 (2026.03)
-> - NeMo 框架文档 (docs.nvidia.com/nemo)
+> - [Shoeybi et al., "Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism" (2019)](https://arxiv.org/abs/1909.08053)
+> - [NVIDIA Megatron-Core 官方文档](https://github.com/NVIDIA/Megatron-LM)
+> - [NVIDIA Megatron-Core, "Scalable Training of Mixture-of-Experts Models with Megatron Core" (2026)](https://arxiv.org/abs/2603.07685)
+> - [NVIDIA NeMo 框架文档](https://docs.nvidia.com/nemo-framework/)

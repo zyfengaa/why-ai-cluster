@@ -234,8 +234,8 @@ NVLink 解决了 8 卡机内的直连，**但 8 张卡之间怎么做到"任意�
 ---
 
 > **参考资料**：
-> - NVIDIA NVLink 官方文档 (docs.nvidia.com)
-> - PCIe 5.0/6.0 规范 (pcisig.com)
-> - DGX H100 架构白皮书：8 卡 NVLink 拓扑详解
+> - [NVIDIA NVLink 官方文档](https://docs.nvidia.com/nvlink/)
+> - [PCIe 5.0/6.0 规范 (pcisig.com)](https://pcisig.com/)
+> - [DGX H100 架构白皮书：8 卡 NVLink 拓扑详解](https://www.nvidia.com/en-us/data-center/dgx-h100/)
 > - 某公司 8 卡 H100 NVLink 故障排查记录（技术社区分享，2024）
-> - NVIDIA GTC 2023: NVLink 技术深度解析
+> - [NVIDIA GTC 2023: NVLink 技术深度解析](https://www.nvidia.com/en-us/gtc/)

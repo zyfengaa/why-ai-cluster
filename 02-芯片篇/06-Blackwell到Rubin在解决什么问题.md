@@ -158,8 +158,8 @@ GPU 的进化一直在朝着同一个方向：**更强的单卡能力 + 更快�
 ---
 
 > **参考资料**：
-> - TrendForce：2026 年 Blackwell 将占 NVIDIA 高端 GPU 出货逾 7 成 (2026.04)
-> - CES 2026 黄仁勋主题演讲
-> - TechPowerUp：GB300 Blackwell Ultra 规格爆料
-> - NVIDIA GTC 2026：DGX Station 发布
-> - SemiAnalysis：NVIDIA GPU Roadmap Deep Dive (2025)
+> - [TrendForce：2026 年 Blackwell 将占 NVIDIA 高端 GPU 出货逾 7 成 (2026.04)](https://www.trendforce.com/presscenter/news/20260408-13002.html)
+> - [CES 2026 黄仁勋主题演讲](https://www.nvidia.com/en-us/events/ces/)
+> - [TechPowerUp：GB300 Blackwell Ultra 规格爆料](https://www.techpowerup.com/)
+> - [NVIDIA GTC 2026：DGX Station 发布](https://www.nvidia.com/en-us/gtc/)
+> - [SemiAnalysis: NVIDIA GPU Roadmap Deep Dive (2025)](https://semianalysis.com/)

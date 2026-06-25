@@ -246,8 +246,8 @@ Gang Scheduling 解决了"所有 GPU 同时到位"的问题。但还有一个更
 ---
 
 > **参考资料**：
-> - "How PCIe, NVLink, and NUMA Topology Affect GPU Scheduling" — Dev.to (2026)
-> - Volcano 调度器文档 (github.com/volcano-sh/volcano)
-> - KAI Scheduler 文档 (NVIDIA, 2025-2026)
-> - Kueue 项目 (Google, 2026)
-> - Slurm Gang Scheduling 文档
+> - [Shankar: "How PCIe, NVLink, and NUMA Topology Affect GPU Scheduling" — Dev.to (2026)](https://dev.to/daya-shankar/how-pcie-nvlink-and-numa-topology-affect-gpu-scheduling-outcomes-l52)
+> - [Volcano 调度器文档](https://github.com/volcano-sh/volcano)
+> - [KAI Scheduler 文档 (NVIDIA, 2025-2026)](https://github.com/NVIDIA/KAI-Scheduler)
+> - [Kueue 项目 (Google, 2026)](https://github.com/kubernetes-sigs/kueue)
+> - [Slurm Gang Scheduling 文档](https://slurm.schedmd.com/gang_scheduling.html)

@@ -219,8 +219,8 @@ numastat -v
 ---
 
 > **参考资料**：
-> - CXL 4.0 规范 (2025.11)
-> - Marvell HCDS Best Paper: "Photonic Fabric for Memory Disaggregation" (2026)
-> - "CXL Memory Pooling for LLM Inference" — IEEE CAL (2026)
-> - Marvell 收购 XConn ($540M, 2026)
-> - "UALink and CXL 4.0" — Introl (2026)
+> - [CXL 4.0 规范](https://computeexpresslink.org/about-cxl/) (2025.11)
+> - [Bridging the Memory Hierarchy Gap in LLM Inference with Photonic Fabric Architecture](https://cn.marvell.com/blogs/hcds-best-paper-award-winner.html) — Marvell HCDS Best Paper (2026)
+> - [A Simulator for LLM Inference Systems Exploiting CXL Memory Pools](https://staging.computer.org/csdl/journal/ca/2026/01/11509274/2ggTYYDroBi) — IEEE CAL (2026)
+> - [Marvell to acquire XConn Technologies for $540M](https://www.nasdaq.com/articles/marvell-technology-buy-xconn-technologies-about-540-mln) (2026)
+> - [UALink and CXL 4.0: The Open Standards Reshaping GPU Cluster Architecture](https://introl.com/blog/ualink-cxl-4-gpu-interconnect-memory-pooling-guide-2025) — Introl (2026)

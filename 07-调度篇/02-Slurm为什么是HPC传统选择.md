@@ -202,8 +202,8 @@ Slurm 是 HPC 的传统选择。但 Kubernetes 在 AI 场景中正在快速崛�
 ---
 
 > **参考资料**：
-> - "Slurm vs. Kubernetes in the Age of AI" — HPCwire (2026)
-> - Spheron: "Slurm for AI Workloads on GPU Cloud" (2026)
-> - "Slurm on Crusoe Managed Kubernetes" — Crusoe (2026)
-> - Slurm 官方文档 (2026)
-> - MLsysbook.ai: "Fleet Orchestration" (2026)
+> - ["Slurm vs. Kubernetes in the Age of AI" — HPCwire (2026)](https://www.hpcwire.com/)
+> - [Spheron: "Slurm for AI Workloads on GPU Cloud" (2026)](https://www.spheron.network/blog/)
+> - [Crusoe: "Slurm on Crusoe Managed Kubernetes" (2026)](https://www.crusoe.ai/resources/blog/slurm-on-crusoe-managed-kubernetes-how-we-built-managed-gpu-training-infrastructure)
+> - [Slurm 官方文档](https://slurm.schedmd.com/documentation.html)
+> - [MLsysbook.ai: "Fleet Orchestration" (2026)](https://mlsysbook.ai/)

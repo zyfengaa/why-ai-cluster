@@ -182,6 +182,6 @@ nvidia-smi --query-gpu=name,compute_cap,memory.total,temperature.gpu \
 ---
 
 > **参考资料**：
-> - NVIDIA CUDA C++ Programming Guide (docs.nvidia.com)
+> - [NVIDIA CUDA C++ Programming Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/)
 > - Hennessy & Patterson, "Computer Architecture: A Quantitative Approach" (第6版)
-> - GPU 与 CPU 架构对比（NVIDIA Developer Blog）
+> - [GPU 与 CPU 架构对比（NVIDIA Developer Blog）](https://developer.nvidia.com/blog/)
