@@ -32,9 +32,11 @@ DDR5 内存条：                    HBM 显存堆栈：
 |------|------|-----------|
 | 封装方式 | 独立芯片插在主板上 | 3D 堆叠，通过**硅中介层**和 GPU 封装在一起 |
 | 位宽 | 64 bit（单条） | **1,024 bit**（是 DDR 的 16 倍） |
-| 带宽 | 64 GB/s（DDR5-6400） | **3,350 GB/s**（H100 HBM3） |
-| 每 GB 成本 | ~$5-10 | ~$30-50 |
-| 最大容量/颗 | ~256 GB | 24-36 GB/堆栈 |
+| 带宽 | 51.2 GB/s（DDR5-6400：6400 MT/s × 64 bit ÷ 8） | **3,350 GB/s**（H100 HBM3） |
+| 每 GB 成本 | ~$3-5 | ~$12-20 |
+| 最大容量/DIMM | ~256 GB | 24-36 GB/堆栈 |
+
+**一句话抓住成本差异**：TrendForce 的口径是「**HBM3e 价格约为服务器 DDR5 的 4-5 倍**」（HBM3e ≈ $12-20/GB，服务器 DDR5 ≈ $3-5/GB）。这就是"同样是内存，显存为什么贵得多"的核心答案。
 
 ### 为什么 HBM 带宽这么高？
 
@@ -67,7 +69,7 @@ DDR5 内存条：                    HBM 显存堆栈：
 - 加更多 HBM 堆栈 → 但 GPU 芯片面积有限，CoWoS 封装成本飙升
 - 用更高密度的 HBM → 每堆栈从 16 GB 到 24 GB 到 36 GB，良率逐步下降
 
-这也是为什么 Blackwell 花了很大精力做 **NVLink 内存池化**——让 2 张 GPU 的显存合并为 1 个更大的逻辑显存。
+这也是为什么 Blackwell 要在**封装内**做功夫——B200 把**两颗 die 封在同一个封装里**，通过 **NV-HBI（die-to-die 互连，10 TB/s）** 在硬件层表现为**一个** 192 GB 的逻辑 GPU，而不是"两张 GPU 的内存池化"（后者是 CXL 的语义）。
 
 ---
 
@@ -81,17 +83,27 @@ DDR5 内存条：                    HBM 显存堆栈：
 # 显存需求估算公式
 模型参数量(B) × 精度字节 × (1 + 优化器系数 + 梯度系数) + 激活值
 
+# 行业口径：全量训练（Adam）的一套状态约 16 bytes/参数
+#   fp16 权重 2 + fp16 梯度 2 + fp32 master 权重 4 + Adam 动量 m 4 + 方差 v 4
+#
 # 实际数字（2026 年典型场景）：
-# 全量训练 70B（FP16）:
-#   140 GB（参数）+ 280 GB（Adam 状态）+ 140 GB（梯度）+ ~70 GB（激活值）
-#   = 630 GB → 需要 8×H100（80 GB × 8）
+# 全量训练 70B（FP16 + Adam）:
+#   140 GB（fp16 权重）+ 140 GB（fp16 梯度）
+#   + 280 GB（fp32 master 权重）+ 280 GB（Adam m）+ 280 GB（Adam v）
+#   = 1,120 GB（还没算激活值）
+#   → 至少 14×H100（80 GB）才刚够装下这些状态；
+#     再叠加激活值、通信 buffer、CUDA context 和碎片，
+#     工程上通常要 16-24×H100。
+#     换句话说，"630 GB 塞进 8 张卡共 640 GB"在工程上根本不可能——
+#     没有余量的显存装不下一个真跑得起来的训练任务。
 #
 # LoRA 微调 70B（FP16）:
 #   140 GB（参数）+ 少量 LoRA 权重 ≈ 150 GB
 #   → 1×GB300（288 GB）就够了！
 #
 # 推理 70B（FP16）:
-#   140 GB（参数）→ 2×H100 NVL（140 GB 对半分）
+#   140 GB（参数）→ H100 NVL 每卡 94 GB HBM3（一对共 188 GB），
+#   2 张即可装下（权重在两卡之间切分，不是"各分一半装 140 GB"）
 ```
 
 **2026 年每 GB 显存的成本对比：**
@@ -101,10 +113,12 @@ DDR5 内存条：                    HBM 显存堆栈：
 | H100 SXM | 80 GB HBM3 | ~$1,200 | ~15% BOM | ~$15/GB |
 | H200 SXM | 141 GB HBM3e | ~$2,100 | ~25% BOM | ~$15/GB |
 | B200 | 192 GB HBM3e | ~$2,800-3,200 | **~45-63% BOM** | ~$15-17/GB |
-| MI300X | 192 GB HBM3 | ~$1,600 | ~30% BOM | ~$8/GB |
+| MI300X | 192 GB HBM3 | ~$1,600 | ~30% BOM | ~$8/GB（BOM 分摊口径） |
 | GB300 | 288 GB HBM3e | ~$4,000+ | **>50% BOM** | ~$14/GB |
 
-**一条经验**：在 B200 上，显存成本已经超过了 GPU 芯片本身的成本。这意味着**未来 GPU 的价差主要来自显存大小，而不是算力**。
+> 注：每 GB 成本随口径差异很大——H100 的 ~$15/GB 是「按 HBM 采购价 ÷ 容量」估算，MI300X 的 ~$8/GB 是「按整卡 BOM 中显存分摊 ÷ 容量」估算，两者不宜直接并列比较。
+
+**一条经验**：显存是一个**可观的成本项**，不同机构估算差异很大（占 BOM 的 30-60%）。这意味着**未来 GPU 的价差有很大一部分来自显存大小，而不只是算力**。
 
 ### 🔧 自己动手验：你的训练任务到底吃多少显存？
 
@@ -135,7 +149,7 @@ nsys profile --trace=cuda,nvtx python train.py
 ### ⚠️ 常见误区
 
 - **误区**："HBM 和 DDR 都是内存，HBM 贵只是因为 NVIDIA 想多赚钱"
-  - **实际**：HBM 的制造工艺比 DDR 复杂得多——**3D 堆叠需要硅通孔（TSV）穿透 8-12 层 DRAM 芯片**，良率控制极其困难。2025 年 HBM3e 一度炒到 $17-20/GB，而同期 DDR5 只要 ~$5/GB。而且 HBM 需要和 GPU 通过 CoWoS 封装在一起，TSMC 的 CoWoS 产能 2025-2026 年一直处于**爆满状态**。
+  - **实际**：HBM 的制造工艺比 DDR 复杂得多——**3D 堆叠需要硅通孔（TSV）穿透 8-12 层 DRAM 芯片**，良率控制极其困难。2025 年 HBM3e 一度炒到 $17-20/GB，而同期服务器 DDR5 只要 ~$3-5/GB——**约 4-5 倍**。而且 HBM 需要和 GPU 通过 CoWoS 封装在一起，TSMC 的 CoWoS 产能 2025-2026 年一直处于**爆满状态**。
 
 - **误区**："显存不够可以加，就像 DDR 内存条一样插几根"
   - **实际**：GPU 核心周围的空间是固定的，能放的 HBM 堆栈数量上限由**芯片面积和 CoWoS reticle 限制**决定。H100 最多 6 堆栈，B200 最多 8 堆栈。要在不增加堆栈数的情况下提升容量，只能靠每堆栈的密度（12-Hi → 16-Hi），而密度提升意味着良率下降、成本飙升。
@@ -148,11 +162,11 @@ nsys profile --trace=cuda,nvtx python train.py
 | 指标 | DDR5 | HBM3 | HBM3e | HBM4（预计） |
 |------|------|------|-------|-----------|
 | 位宽 | 64 bit | 1,024 bit | 1,024 bit | 2,048 bit |
-| 带宽/堆栈 | 64 GB/s | 819 GB/s | 1,180 GB/s | >2 TB/s |
-| 每 GB 成本 | ~$5-10 | ~$8-11 | **~$11-20** | ~$10-16 |
+| 带宽 | 51.2 GB/s（一条 DIMM） | 819 GB/s | 1,180 GB/s | >2 TB/s |
+| 每 GB 成本 | ~$3-5 | ~$10-14 | **~$12-20** | ~$12-18 |
 | 堆叠层数 | 单层 | 8-12 Hi | 12 Hi | 16 Hi |
 | 封装方式 | 独立芯片 | CoWoS 中介层 | CoWoS 中介层 | CoWoS-L/Hybrid |
-| 典型容量/GPU | 256 GB | 80 GB | 141-288 GB | 300-500 GB |
+| 典型容量/部件 | 256 GB（DIMM） | 80 GB（GPU） | 141-288 GB（GPU） | 300-500 GB（GPU） |
 | 占 GPU BOM 比例 | — | 15-30% | **45-63%** | 预计 >60% |
 
 ### 💡 一句话记住
@@ -173,6 +187,7 @@ HBM 太贵、容量有限，即使堆到 288 GB，T 级参数的模型还是放�
 
 > **参考资料**：
 > - [JEDEC HBM3 标准 (jedec.org)](https://www.jedec.org/standards-documents/docs/jesd238b01)
-> - [Samsung / SK Hynix HBM3e 产品规格](https://semiconductor.samsung.com/hbm/)
-> - [CoWoS 封装技术介绍 (TSMC)](https://www.tsmc.com/english/dedicatedFoundry/technology/cowos.htm)
-> - [Chiplet & Advanced Packaging 行业报告 (2025)](https://www.yolegroup.com/) — "HBM 与 GPU 封装技术"
+> - [Samsung HBM 产品规格](https://semiconductor.samsung.com/hbm/) / [SK hynix：全球首款 12 层 HBM3E 量产公告](https://news.skhynix.com/en/sk-hynix-begins-volume-production-of-the-world-first-12-layer-hbm3e/)
+> - [TSMC CoWoS 封装技术介绍](https://3dfabric.tsmc.com/english/dedicatedFoundry/technology/cowos.htm)
+> - [JEDEC HBM4 标准 (JESD270-4A)](https://www.jedec.org/standards-documents/docs/jesd270-4a)
+> - [TrendForce：HBM 价格分析 (2025.12)](https://www.trendforce.com/presscenter/news/20251218-12843.html)

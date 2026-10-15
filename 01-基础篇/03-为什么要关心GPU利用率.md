@@ -1,6 +1,6 @@
 # Q: 为什么要关心 GPU 利用率（MFU）？
 
-## 为什么会有这个问题
+## 为什么诞生这个问题？
 
 上篇讲到多卡通信有开销。但你可能有个更大的疑问：**"我买的 GPU 到底跑满了没有？"**
 
@@ -15,8 +15,14 @@
 **MFU** 是目前业界公认衡量集群训练效率的核心指标（由 Google 在 PaLM 论文中首次明确提出）。定义：
 
 ```
-MFU = 实际观察到的 FLOPS / GPU 的理论峰值 FLOPS
+MFU = 模型本身所需的 FLOPS / GPU 的理论峰值 FLOPS
 ```
+
+三点口径要注意：
+
+- **分子**只计模型前向+反向的**理论 FLOPs（≈ 6ND）**，不含激活重算（activation recomputation）带来的额外计算；
+- **分母**必须用**稠密（dense）峰值**，并注明精度（FP16/BF16/FP8 的峰值各不相同）；
+- PaLM 论文同时定义了 **HFU（Hardware FLOPs Utilization）**：把重算等硬件实际执行的 FLOPs 也计入分子，因此恒有 **HFU ≥ MFU**。PaLM 540B 报告的是 MFU 46.2% / HFU 57.8%，差出来的部分正是重计算的开销。
 
 ### 别和 nvidia-smi 的 GPU-Util 搞混了
 
@@ -29,7 +35,7 @@ MFU = 实际观察到的 FLOPS / GPU 的理论峰值 FLOPS
 
 ### 例子
 
-一个 GPU 1 秒内：前 0.8 秒全速计算（2000 TFLOPS），后 0.2 秒等待梯度同步。
+一个 GPU 1 秒内：前 0.8 秒全速计算（989 TFLOPS），后 0.2 秒等待梯度同步。
 
 - `nvidia-smi GPU-Util` = 80%（因为 80% 的时间算子在跑）
 - MFU = 80% × 100% = 80%（实际 FLOPS / 理论峰值）
@@ -62,7 +68,7 @@ MFU = 实际观察到的 FLOPS / GPU 的理论峰值 FLOPS
 | 50-65% | 优秀 | Megatron-Core + 极致调优 |
 | 70%+ | 顶级 | 极少见，通常只有高度优化的 TP 组内能达到 |
 
-Meta 训练 Llama 3 405B 时的 MFU 大约 38%，经过多轮网络调优后提到 ~43%。
+Meta 训练 Llama 3 405B 时报告的 MFU 分三档：8,192 卡 43%、16,384 卡 41%、131K 长上下文 38%。
 
 ---
 
@@ -89,7 +95,7 @@ Meta 训练 Llama 3 405B 时的 MFU 大约 38%，经过多轮网络调优后提�
 | 单节点全量微调 13B | 35-45% | 检查数据加载是不是瓶颈（dataloader 停顿） |
 | 2-4 节点训练 70B（FSDP2） | 35-50% | 网络通信开销太大 → 检查 NCCL busbw |
 | 16+ 节点训练 70B+（Megatron） | 45-60% | 并行策略配置不合理（TP/PP/DP 没匹配好） |
-| 千卡级预训练 | 50-65%（顶级水平） | 参考 Meta Llama 3 的 43%，Google Gemini 的 57% |
+| 千卡级预训练 | 50-65%（顶级水平） | 参考 Meta Llama 3 405B 的 43%（8,192 卡）、MegaScale 的 55.2% |
 
 **一条经验法则**：如果你的 MFU < 25%，大概率有"低级错误"——比如数据加载没做好、通信没走 RDMA、或者 Batch Size 设得太小。**先解决低级错误，再追求高级优化。**
 
@@ -102,21 +108,23 @@ import torch
 def compute_mfu(num_flops_per_step, step_time_seconds, num_gpus):
     """
     参数：
-      num_flops_per_step: 你模型每次迭代的理论 FLOPs
-                          可以从 Megatron / DeepSpeed 的 log 里拿
+      num_flops_per_step: 每步理论 FLOPs ≈ 6 × N × tokens_per_step
+                          （N = 参数量，可对照 Megatron / DeepSpeed 的 log 核对）
       step_time_seconds: 你训练日志里看到的 step time
       num_gpus: GPU 数量
     返回：MFU（百分比）
     """
-    gpu_peak_fp16_tflops = 2000  # H100 FP16 峰值
-    theoretical_peak = num_gpus * gpu_peak_fp16_tflops * 1e12
+    gpu_peak_dense_tflops = 989  # H100 FP16 稠密峰值（稀疏 1,979）
+    theoretical_peak = num_gpus * gpu_peak_dense_tflops * 1e12
     actual = num_flops_per_step / step_time_seconds
     mfu = actual / theoretical_peak * 100
     return mfu
 
-# 举例：Llama 3 70B 训练，1,024 H100，step_time = 1.2s
-# num_flops_per_step ≈ 8 × (70 × 10^9) × 4096 × 6 ≈ 1.38e16
-# MFU ≈ 1.38e16 / 1.2 / (1024 × 2e15) = 56% ← 这是理想值，实际会更低
+# 举例：Llama 3 70B 训练，1,024 张 H100
+#   全局 batch = 4M tokens/step（tokens_per_step = 4e6）
+#   每步 FLOPs ≈ 6 × N × tokens_per_step = 6 × 70e9 × 4e6 ≈ 1.68e18
+#   MFU = 6 × 70e9 × 4e6 / (step_time × 1,024 × 989e12)
+#   若实测 step_time = 3.7 s → MFU ≈ 1.68e18 / (3.7 × 1.013e18) ≈ 45%
 ```
 
 **不用自己算的方法**：用 PyTorch Profiler 或 Nsight Systems：
@@ -168,6 +176,7 @@ nsys profile -o profile_output python train.py
 ---
 
 > **参考资料**：
-> - [Chowdhery et al., "PaLM: Scaling Language Modeling with Pathways" (2022)](https://arxiv.org/abs/2204.02311) — 首次提出 MFU
-> - [Google DeepMind 对 MFU 的深入讨论 (2024)](https://deepmind.google/research/)
-> - [2026 年分布式训练深度分析报告 — 各框架 MFU 实测对比](https://www.semianalysis.com/)
+> - [Chowdhery et al., "PaLM: Scaling Language Modeling with Pathways" (2022)](https://arxiv.org/abs/2204.02311) — 首次提出 MFU / HFU
+> - [Llama Team, AI @ Meta, "The Llama 3 Herd of Models" (2024)](https://arxiv.org/abs/2407.21783) — Llama 3 405B 的 MFU 分档数据
+> - [Jiang et al., "MegaScale: Scaling Large Language Model Training to More Than 10,000 GPUs" (2024)](https://arxiv.org/abs/2402.15627) — 报告 55.2% MFU
+> - [NVIDIA H100 Tensor Core GPU 产品规格](https://www.nvidia.com/en-us/data-center/h100/) — 稠密/稀疏算力口径

@@ -66,9 +66,14 @@ Kubernetes 原生调度是"逐个 Pod"进行的。对于一个需要 64 卡的�
 
 | 方案 | 来源 | 原理 |
 |------|------|------|
+| **K8s 原生 gang scheduling（KEP-4671）** | Kubernetes 社区 | 内置于核心调度器；v1.37 达 beta 但**默认关闭**，需显式开启 |
 | **Volcano** | 华为开源 | 支持 PodGroup 和 Gang Scheduling |
-| **KAI Scheduler** | NVIDIA（2025 开源） | 基于 Run:ai 技术，Kubernetes 原生 |
-| **Kueue** | Google 开源 | 面向批处理的排队和配额管理 |
+| **KAI Scheduler** | NVIDIA（源自 Run:ai 技术） | Kubernetes 原生，队列与拓扑感知 |
+| **Kueue** | Google 开源 | 面向批处理的排队和配额管理，与原生调度器配合 |
+
+> 截至 2026 年，原生 gang scheduling 虽然已进核心并达到 beta，但默认关闭；**生产上的推荐架构仍是 Kueue 负责排队与配额 + Volcano/coscheduling（或 KAI Scheduler）负责 Pod 组的 all-or-nothing 调度**。
+
+> 背景：**NVIDIA 已于 2024-12-30 以约 7 亿美元完成对 Run:ai 的收购**——KAI Scheduler 正是源自 Run:ai 的调度技术，这也是理解它"为什么是 K8s 原生风格"的关键前情。
 
 ### 挑战 2：拓扑感知
 
@@ -76,15 +81,14 @@ Kubernetes 默认不知道什么是 NVLink、NVSwitch。分配 GPU 时可能：
 - 把 8 卡任务分到 2 台不同节点的 4 张卡上（而不是同一台 8 卡机器）
 - 把 4 个需要 NVLink 通信的 GPU 分到不同 PCIe 根上
 
-**解决方案**：
+**解决方案**：GPU 的拓扑信息由 **NVIDIA GPU Feature Discovery（GFD）** 采集并写成**节点标签**（如 `nvidia.com/gpu.product`；多节点 NVLink 场景下还有 `nvidia.com/gpu.clique`），调度侧则通过 **topologyKey 亲和约束**或 **DRA（Dynamic Resource Allocation）/ ComputeDomain** 来表达"这些 GPU 必须落在同一 NVLink 域"。
+
 ```yaml
-# NVIDIA GPU Operator + Topology Manager
+# 通过节点亲和 + GFD 写入的拓扑标签约束
 apiVersion: v1
 kind: Pod
 metadata:
   name: training-pod
-  annotations:
-    nvidia.com/gpu-request-topology: "nvlink"
 spec:
   containers:
   - name: trainer
@@ -92,22 +96,42 @@ spec:
     resources:
       limits:
         nvidia.com/gpu: 8
+  affinity:
+    # 用 GFD 写入的拓扑标签，把需要 NVLink 通信的 Pod 约束到同一 NVLink 域
+    podAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+      - topologyKey: nvidia.com/gpu.clique   # GFD 写入的 NVLink 域标签
+        labelSelector:
+          matchLabels:
+            app: trainer
   schedulerName: kai-scheduler  # 拓扑感知调度器
 ```
 
+> 注意：像 `nvidia.com/gpu-request-topology` 这样的**注解并不存在**——GPU 拓扑不是靠 Pod 注解声明，而是靠 GFD 写入节点标签、再在调度侧用 topologyKey 或 DRA 表达。
+
+补充一句：**Dynamic Resource Allocation（DRA）已在 Kubernetes 1.34 正式 GA（2025-09）**，成为 GPU 等加速器资源分配的现代机制。它用 `ResourceClaim` 描述"我要什么样的设备"，让调度器能按设备属性（型号、MIG 配置、NVLink 域）而不是只靠整数计数来分配 GPU；NVIDIA 也在 DRA 之上提供了 ComputeDomain（把多节点 NVLink 域暴露给作业）等能力。
+
 ### 挑战 3：网络性能
 
-K8s 的容器网络（CNI）默认会引入额外的网络跳转，对需要 RDMA/InfiniBand 通信的分布式训练来说，这是不可接受的。
+K8s 的默认容器网络（CNI）走 overlay/IP，对需要 RDMA/InfiniBand 通信的分布式训练来说，性能和语义都不合适。**但解法不是 `hostNetwork: true`**——把 Pod 塞进宿主机网络栈只能拿到普通 TCP/IP，**并不能换来 RDMA/NCCL over IB**，反而会破坏 CNI 的网络隔离与多租户。
 
-**解决方案**：
+**解决方案**：用 **Multus + SR-IOV / IB Device Plugin / RDMA shared device plugin**（GPU Operator 已内置），把 IB 网卡作为 **secondary network 直通**给 Pod：
+
 ```yaml
-# 使用 hostNetwork 绕过 CNI
+# 通过 Multus 把 IB 网卡作为 secondary network 挂给 Pod
+apiVersion: v1
+kind: Pod
+metadata:
+  name: training-pod
+  annotations:
+    k8s.v1.cni.cncf.io/networks: ib-net   # 引用 NetworkAttachmentDefinition
 spec:
-  hostNetwork: true  # 直接使用宿主机网络栈
   containers:
   - name: trainer
-    ports:
-    - containerPort: 29500  # NCCL 通信端口
+    resources:
+      limits:
+        nvidia.com/gpu: 8
+        rdma/rdma_shared_device_a: 1        # 通过 RDMA shared device plugin 请求 RDMA 设备
 ```
 
 ---
@@ -157,7 +181,6 @@ spec:
       value: "0"
     - name: NCCL_SOCKET_IFNAME
       value: "eth0"
-  hostNetwork: true  # 直接使用宿主机网络
   restartPolicy: Never
 EOF
 
@@ -168,7 +191,7 @@ kubectl logs -f pytorch-train
 ### ⚠️ 常见误区
 
 - **误区**："Kubernetes 不适合大规模训练，性能损失太大"
-  - **实际**：**如果配置正确（hostNetwork + GPU Operator + Topology Manager），Kubernetes 的网络和 GPU 性能损失可以控制在 1% 以内**。Meta 的 24K GPU 集群跑在 K8s 上就是最好的证明。
+  - **实际**：**如果配置正确（Multus/SR-IOV + GPU Operator + Topology Manager），Kubernetes 的网络和 GPU 性能损失可以控制在 1% 以内**。Meta 的 24K GPU 集群跑在 K8s 上就是最好的证明。
 
 - **误区**："Kubernetes 的容器化对训练来说太重了"
   - **实际**：容器化恰恰是训练团队最需要的——**环境一致性和可复现性**。2026 年，Slurm 集群也在用 Pyxis/Enroot 容器。
@@ -182,9 +205,9 @@ kubectl logs -f pytorch-train
 |------|-----------|-------|------|
 | 批处理调度 | ⚠️ 需插件 | ✅ 原生 | Slurm |
 | 推理服务 | ✅ 原生 | ❌ | K8s |
-| 弹性伸缩 | ✅ 原生 | ❌ | K8s |
-| 自愈 | ✅ 原生 | ❌ | K8s |
-| 最大集群 | ~5,000 节点 | ~30,000 节点 | Slurm |
+| 弹性伸缩 | ✅ 原生 | ⚠️ 需 `--requeue` + checkpoint | K8s |
+| 自愈 | ✅ 原生 | ⚠️ 需显式 `--requeue`，无声明式自愈 | K8s |
+| 最大集群 | ~5,000 节点 | 10 万+ 节点 | Slurm |
 | 训练启动速度 | ~5-30 s | ~1-2 s | Slurm |
 | 统一平台 | ✅ 端到端 | ❌ 纯调度 | K8s |
 | 学习曲线（AI 团队）| 陡 | 平 | Slurm |
@@ -199,15 +222,17 @@ kubectl logs -f pytorch-train
 
 但 Kubernetes 和 Slurm 不是"二选一"——2025-2026 年的最大趋势是两者结合。
 
-NVIDIA 收购 SchedMD（Slurm 的母公司）后，开源了 **Slinky（Slurm on Kubernetes）**——把 Slurm 作为 K8s 的工作负载运行。这就是下一节的内容。
+**Slinky（Slurm on Kubernetes）** 是 **SchedMD 自己的开源项目**——1.0.0 于 **2025-11-20** 发布、KubeCon Europe 2025（4 月）已有演讲，**早于 NVIDIA 在 2025-12-15 宣布收购 SchedMD**。它把 Slurm 作为 K8s 的工作负载运行。（注意措辞：Slurm 是项目，SchedMD 是其主要的开发公司。）这就是下一节的内容。
 
 → [[04-NVIDIA收购SchedMD意味着什么]]
 
 ---
 
 > **参考资料**：
-> - [Shakti Cloud: "Kubernetes vs SLURM for AI Workloads" (2026)](https://shakti.cloud/)
-> - [Spectro Cloud: "Why the top AI labs run Kubernetes on bare metal" (2026)](https://www.spectrocloud.com/)
-> - ["Slurm vs. Kubernetes in the Age of AI" — HPCwire (2026)](https://www.hpcwire.com/)
+> - ["What Does NVIDIA's Acquisition of SchedMD Mean for Slurm?" — HPCwire (2026)](https://www.hpcwire.com/2026/01/06/what-does-nvidias-acquisition-of-schedmd-mean-for-slurm/)
+> - [Volcano PodGroup 文档](https://volcano.sh/docs/concepts/podgroup/)
+> - [Kueue 文档](https://kueue.sigs.k8s.io/)
+> - [Kubernetes v1.34：DRA 正式 GA](https://kubernetes.io/blog/2025/09/01/kubernetes-v1-34-dra-updates/)
+> - [Kubernetes 大规模集群最佳实践（cluster-large）](https://kubernetes.io/docs/setup/best-practices/cluster-large/)
 > - [NVIDIA GPU Operator 文档](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/)
-> - [KAI Scheduler 文档](https://github.com/NVIDIA/KAI-Scheduler)
+> - [KAI Scheduler 文档](https://github.com/kai-scheduler/KAI-Scheduler)

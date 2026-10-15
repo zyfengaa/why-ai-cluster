@@ -38,8 +38,9 @@ PP：模型并行中的流水线调度（解决"串行"）
 |- | ZeRO-3 能解决 | ZeRO-3 不能解决 |
 |---|--------------|----------------|
 | 模型参数太大 | ✅ 分片到多卡 | — |
-| 单层太大放不下 | → 分片后所有卡仍存 1/N 层，但单层矩阵仍完整 | ❌ **TP 才能切单层** |
-| 通信效率 | ⚠️ 每步多 2 次集体通信 | ✅ TP 只在 NVLink 域内快速通信 |
+| 单层太大放不下 | ❌ 分片只在**存储**时发生；计算某一层前会 AllGather 出该层**完整参数**，单层峰值显存不降 | ✅ **TP 才能切单层**，把层内矩阵也拆开 |
+
+**注意**：ZeRO-3 每步会多出 2 次集体通信（AllGather / ReduceScatter），这是它的性能代价；但那属于"快不快"的问题，与"单层放不放得下"不是一回事，所以不放进上面这张表比较。
 
 **结论**：ZeRO-3 解决"模型整体太大"（存不下所有层），TP 解决"单层太大"（一层就超显存）。两者互补。
 
@@ -77,7 +78,7 @@ PP：模型并行中的流水线调度（解决"串行"）
 1. **ZeRO-3 不是 TP/PP 的替代品**——它们解决不同的问题
 2. **ZeRO-3 + TP 是最常见的组合**——TP 在 NVLink 域内（8 卡），ZeRO-3 处理跨域的数据并行
 3. **ZeRO-3 + TP + PP 是超大模型的标配**——但 PP 可以用 Zero Bubble 降低气泡
-4. **FSDP2 = PyTorch 的 ZeRO-3 实现**——功能等价，API 更干净
+4. **FSDP2 与 ZeRO-3 机制目标等价**（都分片参数/梯度/优化器状态），但**并不等价**：切分粒度（FSDP2 的 per-parameter DTensor vs ZeRO-3 的 flat bucket）、通信调度、offload 成熟度（ZeRO-Infinity 远强于 FSDP2）、checkpoint 生态（FSDP2 绑 DCP）都不同——**两者是不同权衡，不是替代关系**
 
 ---
 
@@ -86,8 +87,8 @@ PP：模型并行中的流水线调度（解决"串行"）
 ### 📋 决策指南：ZeRO 还是 TP？
 
 ```
-单层显存需求 > 单卡显存的 30%？
-├─ 是 → TP 必须（ZeRO 无法切单层）
+单层的「参数 AllGather 峰值 + 激活峰值」会超过单卡可用显存？
+├─ 是 → TP 必须（ZeRO 切不动单层）
 └─ 否 →
    模型总显存 > 单卡显存？
    ├─ 是 → ZeRO-3（参数分片即可）
@@ -95,23 +96,25 @@ PP：模型并行中的流水线调度（解决"串行"）
 ```
 
 ```python
-# 判断是否需要 TP
+# 判断是否需要 TP：看"单层峰值"是否放得下，而不是看模型总量
 hidden_dim = 8192
 batch_size = 4
 seq_len = 4096
-precision = 2  # FP16 bytes
+precision = 2  # FP16/BF16 bytes
 
-# 单层 MLP 的 4 个矩阵 × 权重
-single_layer_params = 4 * hidden_dim * hidden_dim * precision
-# 单层 Attention 的中间激活
+# ① 参数 AllGather 峰值：ZeRO-3 计算某层前要把该层完整参数聚合出来
+#    单层 MLP 是 W1/W2 两个矩阵（不是 4 个）
+single_layer_params = 2 * hidden_dim * hidden_dim * precision
+# ② 激活峰值：该层前向要保存的中间激活（attention + MLP，粗估 4× hidden）
 single_layer_act = batch_size * seq_len * hidden_dim * precision * 4
+# ③ 优化器状态已被分片到各卡，单卡只担 1/N，不会成为单层峰值的主导项
 
 single_layer_mem = (single_layer_params + single_layer_act) / 1024**3
 gpu_mem = 80  # H100 显存 GB
 
-print(f"单层显存需求: {single_layer_mem:.1f} GB")
+print(f"单层峰值显存: {single_layer_mem:.1f} GB")
 print(f"占 H100 比例: {single_layer_mem/gpu_mem*100:.0f}%")
-if single_layer_mem > gpu_mem * 0.3:
+if single_layer_mem > gpu_mem:
     print("→ 需要 TP")
 else:
     print("→ 不需要 TP，ZeRO-3 就够了")
@@ -126,5 +129,6 @@ else:
 > **参考资料**：
 > - [Rajbhandari et al., "ZeRO: Memory Optimizations Toward Training Trillion Parameter Models" (2020)](https://arxiv.org/abs/1910.02054)
 > - [Shoeybi et al., "Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism" (2019)](https://arxiv.org/abs/1909.08053)
-> - ["ZeRO + TP: A Practical Guide" — DeepSpeed 文档](https://www.deepspeed.ai/)
-> - [FSDP2 与 TP 组合实践 (PyTorch 2.5+)](https://pytorch.org/docs/stable/fsdp.html)
+> - [DeepSpeed ZeRO 官方教程](https://www.deepspeed.ai/tutorials/zero/)
+> - [FSDP2 与 TP 组合实践（`fully_shard` API，PyTorch 2.5+）](https://docs.pytorch.org/docs/stable/distributed.fsdp.fully_shard.html)
+> - [Megatron-Core 并行指南](https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/parallelism-guide.html)

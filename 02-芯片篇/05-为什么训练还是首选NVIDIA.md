@@ -35,8 +35,8 @@ NVIDIA 构建了三层软件栈，每一层都是实质性的竞争壁垒：
 |------|------|---------|---------|
 | **AMD** | MI300X（192GB HBM3，强于 H100） | ROCm，兼容 CUDA 代码 | PyTorch/Triton 适配仍有 gap；新算子需要手动写 ROCm 实现 |
 | **华为** | 昇腾 910B/910C | CANN + MindSpore | PyTorch 适配靠第三方插件；CUDA 兼容层性能损失 10-20% |
-| **Google** | TPU v7 Ironwood | JAX/XLA（封闭生态） | 仅供 Google Cloud 内部使用，不对外单独销售 |
-| **Intel** | Gaudi 3 | OneAPI + PyTorch Extension | 市场份额极小，社区支持弱 |
+| **Google** | TPU v7 Ironwood（FP8 4,614 TFLOPS、192 GB HBM3e、7.4 TB/s、9,216 芯片 pod、液冷） | JAX/XLA，现已支持 PyTorch/XLA | 主要通过 Google Cloud 对外提供，不单独售卖芯片 |
+| **Intel** | Gaudi 3（2026 年已非其 AI 战略主线：Falcon Shores 取消，转向 Crescent Island） | OneAPI + PyTorch Extension | 市场份额极小，社区支持弱 |
 
 ---
 
@@ -47,7 +47,7 @@ AMD 的 MI300X 在硬件上很有竞争力：
 - 显存带宽 **5.2 TB/s** vs H100 的 3.35 TB/s
 - 价格低 30-50%
 
-但根据 2026 年初的测试，跑 Llama 3 70B 微调时，MI300X 集群的 MFU 仍然比 H100 集群低约 15-20%，主要差在：
+但根据 2026 年初的测试，跑 Llama 3 70B 微调时，MI300X 集群的 MFU 仍然比 H100 集群低约 **15-20%**；**如果工作流强依赖 CUDA 专属优化（Flash Attention、FusedAdam、DeepSpeed/Megatron 高级特性），差距会扩大到 30-40%**。主要差在：
 1. ROCm 对 Flash Attention 的支持不如 CUDA 成熟
 2. NCCL 的 AMD 替代（RCCL）在大规模跨机通信时性能不稳定
 3. PyTorch 2.x 中部分 CUDA 优化算子无法自动翻译到 ROCm
@@ -64,9 +64,11 @@ AMD 的 ROCm 6.0+ 在 2025-2026 年进步很快，PyTorch 官方已原生支持 
 
 | 规格 | 昇腾 910B | 昇腾 910C（2026） |
 |------|----------|-----------------|
-| FP16 算力 | ~320 TFLOPS | ~400+ TFLOPS |
-| 显存 | 64 GB HBM2e | 96 GB HBM3 |
+| FP16 算力 | ~376 TFLOPS | ~780-800 TFLOPS（双 die 封装 ≈ 2×910B） |
+| 显存 | 64 GB HBM2e（带宽约 392 GB/s） | 128 GB HBM2e（带宽约 3.2 TB/s） |
 | 互联 | HCCS（华为私有） | HCCS 2.0 |
+
+**关键参照物**：华为的 **CloudMatrix 384 / Atlas 900 A3 SuperPoD** 把 **384 颗 910C** 通过自研互联（UB/光互联）连成单一计算域——这是昇腾目前最大规模的公开系统形态。
 
 **最大的挑战**：虽然 PyTorch 通过 torch_npu 插件可以适配昇腾，但 DeepSpeed、Megatron 的很多高级特性（ZeRO-3 Offload、Sequence Parallelism）在昇腾上兼容性差。目前昇腾主要用于"国产化要求"的推理部署场景，训练场景仍然有限。
 
@@ -120,31 +122,34 @@ grep -r "FusedAdam\|FlashAttention\|cuBLAS\|cuDNN" --include="*.py" . | head -10
 # 3. 关键检查：是否用了 NCCL？
 grep -r "nccl\|NCCL\|distributed" --include="*.py" . | head -10
 # 如果用了 torch.distributed 且指定了 nccl backend →
-# 迁移到 AMD 需要改用 gloo backend（性能损失 30-50%）或 RCCL
+# 在 AMD 上继续用 nccl backend 即可：PyTorch 的 ROCm 构建会把它
+# 映射到 RCCL，backend 名和 API 都不变。
+# 千万不要改成 gloo——那会绕过 GPU 间高速链路、掉到 PCIe/网络
+# 并经由 CPU 中转，正是本教程反复告诫的反模式。
 ```
 
 ### ⚠️ 常见误区
 
 - **误区**："AMD MI300X 的硬件规格比 H100 强，所以训练更快"
-  - **实际**：2025-2026 年第三方实测：MI300X 实际 AI 训练吞吐只有 H100 的 **60-70%**，尽管 FP16 峰值算力高出 32%。原因：① ROCm 编译器和算子库不如 CUDA 成熟，实际利用率仅 45%（H100 可达 93%）；② 跨机通信 RCCL 在大规模下性能不稳定；③ Flash Attention 等关键优化在 ROCm 上支持不全。**硬件规格不等于实际性能。**
+  - **实际**：2025-2026 年第三方实测（Llama 3 70B 微调、8×GPU、PyTorch 原生路径）：MI300X 实际训练吞吐约为 H100 的 **80-90%**（低 10-20%）；若强依赖 CUDA 专属算子与 DeepSpeed/Megatron 高级特性，吞吐会掉到 H100 的 **60-70%**（低 30-40%），尽管 FP16 峰值算力高出 32%。原因：① ROCm 编译器和算子库不如 CUDA 成熟，实际利用率约 45%（H100 可达 93%）；② 跨机通信 RCCL 在大规模下性能不稳定；③ Flash Attention 等关键优化在 ROCm 上支持不全。**硬件规格不等于实际性能。**
 
 - **误区**："昇腾 910C 是国产替代，可以完全替代 H100"
   - **实际**：昇腾 910C 目前的定位是"国产化要求"的**推理部署**场景，大规模预训练场景兼容性还很差。DeepSpeed ZeRO-3、Megatron、Sequence Parallelism 等高级特性需要大量适配工作。**可以替代 H100 做推理，但做大规模训练还要等生态成熟。**
 
 - **误区**："CUDA 是闭源的，迟早会被开源生态取代"
-  - **实际**：CUDA 已经积累了 **17 年的开发历史**，超过 500 万开发者和上千个加速库。即使 ROCm 完全兼容 CUDA API，NVIDIA 每代新硬件（FP8 Transformer Engine、NVLink SHARP、GDS）都在增加新的专属优化，竞争对手至少落后 1-2 代。**2026 年 CUDA 的生态优势不是在缩小，而是在扩大。** AMD 证券研究（ainvest.com, 2026.06）数据：NVIDIA 训练市场占有率仍高达 80-92%。
+  - **实际**：CUDA 已经积累了 **19 年的开发历史**（CUDA 1.0 发布于 2007 年），超过 500 万开发者和上千个加速库。即使 ROCm 完全兼容 CUDA API，NVIDIA 每代新硬件（FP8 Transformer Engine、NVLink SHARP、GDS）都在增加新的专属优化，竞争对手至少落后 1-2 代。**2026 年 CUDA 的生态优势不是在缩小，而是在扩大。** 根据 IDC / Omdia / TrendForce 等机构 2026 年的估算，NVIDIA 在 AI 训练加速器市场的占有率仍高达 80% 以上。
 
 ### 📊 底线数字速查
 
 | 维度 | NVIDIA H100 | AMD MI300X | 华为昇腾 910C |
 |------|------------|-----------|--------------|
-| 训练市场占有率（2026） | **~80-92%** | ~5-7% | 极低（以推理为主）|
-| 实际训练吞吐（8×GPU） | **147K tok/s**（基线） | 101K tok/s（-31%） | 无公开可比数据 |
-| 显存 | 80 GB HBM3 | 192 GB HBM3 | 96 GB HBM3 |
+| 训练市场占有率（2026） | **~80%+**（IDC/Omdia 估算） | ~5-7% | 极低（以推理为主）|
+| 实际训练吞吐（8×GPU，Llama 3 70B 微调） | **147K tok/s**（基线，PyTorch 原生路径） | ~125K tok/s（-15%） | 无公开可比数据 |
+| 显存 | 80 GB HBM3 | 192 GB HBM3 | 128 GB HBM2e |
 | 生态成熟度 | ✅ **业界标准** | ⚠️ 进步中，训练仍有 gap | ❌ 推理可用，训练受限 |
-| FP8 训练 | ✅ 原生支持 | ❌ 软件模拟 | ❌ 不支持 |
+| FP8 训练 | ✅ 原生支持 | ✅ 原生支持（CDNA3 原生 FP8/BF8 GEMM，稠密 2,615 TFLOPS、稀疏 5.2 PFLOPS；缺的是 FP4/FP6） | ❌ 不支持 |
 | 开源框架支持 | ✅ 框架原生 | ✅ PyTorch 官方 | ⚠️ 需要 torch_npu 插件 |
-| 大规模分布式训练 | ✅ 万卡验证 | ⚠️ 千卡级别 | ❌ 少有大规模训练案例 |
+| 大规模分布式训练 | ✅ 万卡验证 | ⚠️ 千卡级别 | ⚠️ CloudMatrix 384（384 卡域）已有公开案例，生态仍在完善 |
 | 价格 | ~$28K | ~$15K（-47%） | ~$10-15K（预估） |
 | 最佳场景 | **训练 + 推理** | **推理（成本敏感）** | **推理（国产化）** |
 
@@ -165,8 +170,8 @@ NVIDIA 的生态优势意味着：**即使 AMD/华为的硬件有竞争力，202
 ---
 
 > **参考资料**：
-> - [MLPerf Training v4.0 / v5.0 基准对比](https://mlcommons.org)
+> - [MLPerf Training 基准 (MLCommons)](https://mlcommons.org/benchmarks/training/)
 > - [AMD ROCm 6.0 发布说明](https://rocm.docs.amd.com/en/docs-6.0.0/about/release-notes.html)
-> - [华为昇腾产品页面](https://www.huawei.com/)
-> - [SemiAnalysis: "NVIDIA vs AMD for AI: The Real Story" (2025)](https://semianalysis.com/)
-> - 2026 年各 GPU 厂商 Benchmark 实测对比报告
+> - [AMD Instinct MI300X 产品简介 (PDF)](https://www.amd.com/content/dam/amd/en/documents/partner-hub/instinct/instinct-mi300x-accelerator-product-briefs.pdf)
+> - [华为昇腾 AI 硬件产品页](https://www.hiascend.com/en/hardware)
+> - [Google Cloud TPU v7x (Ironwood) 文档](https://docs.cloud.google.com/tpu/docs/tpu7x)

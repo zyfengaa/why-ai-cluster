@@ -2,13 +2,15 @@
 
 ## 为什么会有这个问题
 
-2025 年 10 月，NVIDIA 宣布收购 SchedMD——Slurm 的创造者和维护者。消息一出，HPC 和 AI 社区炸开了锅：
+2025 年 12 月 15 日，NVIDIA 宣布收购 SchedMD——Slurm 项目当前的主要维护公司（Slurm 本身由 LLNL 于 2001/2002 年创造，SchedMD 成立于 2010 年）。消息一出，HPC 和 AI 社区炸开了锅：
 
 - "NVIDIA 要'杀'掉 Slurm？"
 - "Kubernetes 要统一天下了？"
-- "SchedMD 这家 20 多年的老店被收编了？"
+- "SchedMD 这家 15 年的公司被收编了？（Slurm 项目 20+ 年，SchedMD 公司 15 年）"
 
 **事实是：Slurm 不会死，但它在 AI 集群中的角色正在发生根本性变化。**
+
+> 一个常被忽略的背景：**NVIDIA 与 Slurm 的官方合作早于本次收购十余年**——NVIDIA 很早就通过 **DGX SuperPOD + Base Command Manager（BCM）** 官方集成 Slurm（同时支持 K8s/Run:ai）。所以"拥抱 Slurm"并不是这次收购才开始的。
 
 ## 解决什么问题：AI 集群的"调度分裂"
 
@@ -27,9 +29,9 @@ Kubernetes → 管理推理（长运行服务）
   - 运维团队需要掌握两种调度器的技能
 ```
 
-**NVIDIA 的"阳谋"**：收购 SchedMD，然后让 Slurm 成为 Kubernetes 的一个工作负载。
+**业界的推测（非官方口径）**：有人认为 NVIDIA 收 SchedMD，是为了让 Slurm 成为 Kubernetes 的一个工作负载，用 K8s 做统一底座。**但这只是分析，不是官方表态**——NVIDIA 的收购公告只承诺"保持 Slurm 开源与厂商中立、继续为数百家客户提供支持、HPC + AI 双线并进"，**没有任何"把 Slurm 包进 K8s"的表述**；而且 Slinky 在收购前就已存在（1.0.0 发布于 2025-11-20）、CoreWeave 的 SUNK 在 2024 年初就已上线——"Slurm 跑在 K8s 上"不是这次收购带来的转变。下面这张图是**分析视角**，不是官方路线图。
 
-### 收购的"阳谋"逻辑
+### 收购的分析视角（业界推测，非官方口径）
 
 ```
 收购前：
@@ -47,7 +49,7 @@ Kubernetes → 管理推理（长运行服务）
 
 ### Slinky（Slurm on Kubernetes）
 
-Slinky 是 SchedMD 在收购后开源的项目（v1.0 GA 2025 年底）：
+Slinky 是 **SchedMD 自己的开源项目**（v1.0.0 于 2025-11-20 发布，**早于 2025-12-15 的收购**；KubeCon Europe 2025 已有演讲）：
 
 ```
 架构：
@@ -69,17 +71,18 @@ Slinky 是 SchedMD 在收购后开源的项目（v1.0 GA 2025 年底）：
   └─────────────────────────────────┘
 ```
 
-**性能数据**（NVIDIA 内部测试）：
-- 8,000 GPU 规模验证
+**性能参考**（来自 NVIDIA 官方博客，而非"内部测试"）：
+- 已验证 8,000 GPU 规模的 Slurm on Kubernetes 部署
 - 相比裸金属 Slurm，**性能损失可忽略**
-- 训练和推理可以共享 GPU 池 → 利用率提升 20-30%
+- 训练和推理可以共享 GPU 池 → 减少闲置 GPU、提高复用率
 
 ### CoreWeave SUNK
 
-CoreWeave（云 GPU 提供商）在 2025 年中率先推出了生产级混合方案：
+CoreWeave（云 GPU 提供商）在 2024 年初就已推出生产级混合方案 SUNK：
 
 ```
-SUNK = Slurm User Networking on Kubernetes
+SUNK = CoreWeave 的"Slurm on Kubernetes"方案
+       （CoreWeave's system for running Slurm on Kubernetes）
 
 特点：
   - 同一集群同时跑 Slurm 训练 + K8s 推理
@@ -92,6 +95,8 @@ SUNK = Slurm User Networking on Kubernetes
 ---
 
 ## 这对生态意味着什么
+
+收购引发的最集中的争议是**厂商中立性**：Slurm 长期是跨厂商、跨站点的公共 HPC 调度器，如今它的主要维护方归于一家 GPU 厂商，社区自然会担心它的"中立性"还能维持多久——这正是 HPCwire 2026 年 1 月那篇文章的主旨。NVIDIA 回应称会保持 Slurm 开源与厂商中立（见文末参考链接）。
 
 ### 对 Slurm 用户
 
@@ -192,7 +197,7 @@ nvidia-smi dmon -s puct -d 30
 
 ### 💡 一句话记住
 
-> **"NVIDIA 收购 SchedMD，不是要'杀'掉 Slurm，而是要用 Kubernetes 把 Slurm 包起来——让 Slurm 继续做它最擅长的训练调度，但让 K8s 成为统一底座。2026 年，'Slurm on K8s'正在成为 AI 集群的新标配。"**
+> **"NVIDIA 收购 SchedMD，官方承诺是'保持 Slurm 开源与厂商中立、继续支持数百家客户'。至于'要用 K8s 把 Slurm 包起来'——那更多是业界分析（毕竟 Slinky 收购前就存在、SUNK 2024 年初已上线），并非官方表述。无论哪种解读，2026 年'Slurm on K8s'都在成为 AI 集群的重要选项。"**
 
 ---
 
@@ -207,8 +212,10 @@ nvidia-smi dmon -s puct -d 30
 ---
 
 > **参考资料**：
-> - ["NVIDIA Acquires SchedMD" — 官方公告 (2025)](https://nvidia.com/)
-> - ["Slurm vs. Kubernetes in the Age of AI" — HPCwire (2026)](https://www.hpcwire.com/)
+> - ["NVIDIA Acquires Open-Source Workload Management Provider SchedMD" — NVIDIA 官方公告 (2025-12-15)](https://blogs.nvidia.com/blog/nvidia-acquires-schedmd/)
+> - ["What Does NVIDIA's Acquisition of SchedMD Mean for Slurm?" — HPCwire (2026)](https://www.hpcwire.com/2026/01/06/what-does-nvidias-acquisition-of-schedmd-mean-for-slurm/)
 > - [CoreWeave SUNK 文档](https://docs.coreweave.com/products/sunk/)
-> - [Slinky 项目 — SchedMD/NVIDIA (2025-2026)](https://github.com/)
+> - [Slinky 项目 — GitHub 组织 SlinkyProject](https://github.com/SlinkyProject)
+> - [Slurm Slinky 官方文档](https://slurm.schedmd.com/slinky.html)
+> - [NVIDIA: "Running Large-Scale GPU Workloads on Kubernetes with Slurm"](https://developer.nvidia.com/blog/running-large-scale-gpu-workloads-on-kubernetes-with-slurm/)
 > - [Crusoe: "Slurm on Crusoe Managed Kubernetes" (2026)](https://www.crusoe.ai/resources/blog/slurm-on-crusoe-managed-kubernetes-how-we-built-managed-gpu-training-infrastructure)

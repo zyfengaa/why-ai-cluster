@@ -49,9 +49,12 @@ Gang Scheduling：
 | 调度器 | 实现方式 | 状态（2026） |
 |--------|---------|-------------|
 | **Slurm** | 原生支持（资源粒度分配） | 成熟，20 年验证 |
+| **Kubernetes 原生（KEP-4671）** | 内置于核心调度器 | v1.37 达 beta，**默认关闭** |
 | **Kubernetes + Volcano** | PodGroup CRD | 生产级 |
 | **Kubernetes + KAI Scheduler** | 公平分享排队 | 生产级（NVIDIA 推荐）|
 | **Kubernetes + Kueue** | Workload 排队 | beta |
+
+> 注意：**K8s 原生 gang scheduling（KEP-4671）已在 v1.37 进入核心并达到 beta，但默认关闭**——所以别再说"K8s 必须靠 Volcano/KAI/Kueue 才能做 gang 调度"。生产上仍需 Volcano/KAI/Kueue 等组件来提供更完整的队列、配额和拓扑能力，但原生能力已经存在。
 
 ### Slurm 的 Gang Scheduling
 
@@ -81,8 +84,9 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: trainer-0
-  labels:
-    volcano.sh/podgroup-name: training-group
+  annotations:
+    # Volcano 用"注解"而非标签关联 PodGroup，键为 scheduling.k8s.io/group-name
+    scheduling.k8s.io/group-name: training-group
 spec:
   schedulerName: volcano  # 使用 Volcano 调度器
   ...
@@ -92,7 +96,7 @@ spec:
 
 ## Gang Scheduling 的代价
 
-Gang Scheduling 不是免费午餐——它有一个核心问题：**资源碎片和饥饿**。
+Gang Scheduling 不是免费午餐——它有几个核心问题：**资源碎片、饥饿和死锁**。
 
 ### 资源碎片
 
@@ -120,6 +124,28 @@ Gang Scheduling 不是免费午餐——它有一个核心问题：**资源碎�
   
 这就是"大任务饥饿"问题
 ```
+
+### 死锁
+
+比饥饿更隐蔽的是**同优先级 gang 互等导致的死锁**——这是 gang scheduling 的核心难点：
+
+```
+假设集群有 20 GPU，两个任务同时排队：
+
+  任务 A：需要 12 GPU → 先抢到 10 GPU，等剩余 2 GPU
+  任务 B：需要 12 GPU → 先抢到 10 GPU，等剩余 2 GPU
+  → A 等 B 释放，B 等 A 释放，谁都不肯先放弃已占用的 10 GPU
+  → 20 GPU 全部被"预留"，但两个任务都永远启动不了
+```
+
+根源在于**预留（reservation）把"等待"变成了"占用"**。规避手段：
+
+| 手段 | 原理 |
+|------|------|
+| **禁止部分预留** | 一个 gang 要么整体占住、要么完全不占（Slurm 的默认原子分配、Volcano 的 `minMember` 都是这个思路） |
+| **超时回退** | 等待超过阈值就释放已预留资源、让出位置（Slurm `--switches` 的时间窗、Volcano 的超时都是此类） |
+| **优先级 + 抢占** | 让高优先级大任务可以"挤掉"低优先级任务，打破互等 |
+| **Backfill** | 用小作业填补预留之外的缝隙，减少资源空转 |
 
 ### 解决方案
 
@@ -222,7 +248,6 @@ def simulate_gang_vs_nogang(n_gpus=64):
 
 | 指标 | 无 Gang Scheduling | 有 Gang Scheduling | 最佳实践 |
 |------|-------------------|-------------------|---------|
-| NCCL 初始化成功率 | ~70% | > 99% | 必须 |
 | 资源碎片率 | 低（< 5%） | 中（5-15%） | 配合 Backfill |
 | 大任务等待时间 | 低（直接启动） | 高（可能等很久） | 需要超配策略 |
 | 小任务等待时间 | 低 | 可能被大任务"堵住" | 优先级 + 限制大任务预留时间 |
@@ -250,4 +275,4 @@ Gang Scheduling 解决了"所有 GPU 同时到位"的问题。但还有一个更
 > - [Volcano 调度器文档](https://github.com/volcano-sh/volcano)
 > - [KAI Scheduler 文档 (NVIDIA, 2025-2026)](https://github.com/NVIDIA/KAI-Scheduler)
 > - [Kueue 项目 (Google, 2026)](https://github.com/kubernetes-sigs/kueue)
-> - [Slurm Gang Scheduling 文档](https://slurm.schedmd.com/gang_scheduling.html)
+> - [Slurm `sched/gang`（时间片调度）插件文档](https://slurm.schedmd.com/gang_scheduling.html)：注意这个插件做的是**多个作业分时共享同一批资源**（time-slicing），与本文讲的"all-or-nothing、全部到位才启动"是**两个不同概念**。Slurm 的"全部到位才启动"来自其**多节点原子分配的默认行为**，并不需要这个插件。

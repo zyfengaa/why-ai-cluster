@@ -12,7 +12,7 @@ NVLink 很强大，但有个现实问题：**GPU 之间不是只做"点对点"�
 - 总共需要的连接数：C(8,2) = **28 条**
 - 每张卡需要：**7 个 NVLink 端口**
 
-H100 有 18 个 NVLink 端口，理论上可以点对点连接 7 张卡。实际上 DGX H100 正是这么干的——**8 张 H100 通过 NVLink 形成一个全互联的 "NVSwitch-less" 拓扑**。
+H100 有 18 个 NVLink 端口，理论上足以点对点连接 7 张卡。但**真实的 DGX H100 并不是这么做的**——它使用 **4 颗第三代 NVSwitch（NVSwitch 3.0）**，每颗提供 64 个 NVLink 4.0 端口，**GPU 之间没有任何直连**。历史上不用 NVSwitch、靠 NVLink 直连的是 **DGX-1**；从 **DGX-2** 起 NVIDIA 就引入了 NVSwitch。
 
 但问题是：**GPU 数量继续增加会怎样？**
 
@@ -43,28 +43,30 @@ NVLink 只能在同一机箱内的 GPU 间直连。跨机箱时，又回到了 P
 ### 工作原理
 
 ```
-NVSwitch方案（DGX H100）：
+NVSwitch方案（DGX H100，4 颗 NVSwitch 全交叉）：
                          ┌──────────┐
                     ┌────┤ NVSwitch ├────┐
-                    │    │    #1    │    │
+                    │    │   × 4    │    │
             ┌───────┼────┤         ├────┼───────┐
             │       │    └──────────┘    │       │
           GPU 0   GPU 1   ...        GPU 6   GPU 7
       (18 NVLink) (18)              (18)    (18)
 
-每张 GPU 用 18 条 NVLink 连到 6 个 NVSwitch
-每个 NVSwitch 的 64 个端口连接 8 张 GPU
-总带宽：任意 GPU ↔ 任意 GPU = 900 GB/s
+每张 GPU 用 18 条 NVLink 上行；4 颗 NVSwitch 共 256 个端口，
+承载 8 GPU × 18 = 144 条链路，任意 GPU 之间都是全交叉
+总带宽：任意 GPU ↔ 任意 GPU = 900 GB/s（双向）
 ```
 
 关键：**NVSwitch 不是一张"卡"，它是一个独立的、专用的交换芯片。**
 
 | 规格 | NVSwitch 3 (H100) | NVSwitch 4 (B200) |
 |------|-------------------|-------------------|
-| 端口数 | 64 个 NVLink 4.0 | 144 个 NVLink 5.0 |
-| 总交换带宽 | 57.6 TB/s | 259.2 TB/s |
+| 端口数 | 每芯片 64 个 NVLink 4.0 | 每芯片 72 个 NVLink 5.0（一个 switch tray 内两颗芯片合计 144） |
+| 单芯片交换吞吐 | 13.6 Tb/s（上一代 7.2 Tb/s） | **57.6 Tb/s ≈ 7.2 TB/s** |
 | 延迟 | ~100 ns | <100 ns |
 | 功耗 | ~75W | ~100W |
+
+> 注：57.6 Tb/s 是**系统级**数字（DGX H100 内 8 张 GPU × 18 链路 × 50 GB/s 的全交叉聚合），不是单颗 NVSwitch 的规格；单颗 NVSwitch 3 的交换吞吐是 13.6 Tb/s。另外，交换吞吐的单位是 **Tb/s**（比特），不是 TB/s（字节）。
 
 NVSwitch 让 DGX 机箱内的 8 张 GPU 形成一个**全互联的超大"虚拟 GPU"**——任何两张卡之间的通信都是 NVLink 级带宽，没有"绕路"的惩罚。
 
@@ -115,32 +117,35 @@ DGX × 32 (256 GPU)
 | 单机 8 卡数据并行 | ✅ DGX 标配 | All-Reduce 频繁，NVSwitch 提升明显 |
 | 单机 8 卡模型并行（TP） | ✅ **强烈推荐** | TP 要求每步通信，NVSwitch 延迟极低 |
 | 多机多卡（32+ GPU） | ✅ 每机箱内需要 | 机箱内用 NVSwitch，机箱间用 IB/RoCE |
-| DGX B200 NVL72 | ✅ **NVSwitch 4 必须** | 72 GPU 全互联，全靠 NVSwitch |
+| GB200 NVL72 / GB300 NVL72 | ✅ **NVSwitch 4 必须** | 72 GPU 全互联，全靠 NVSwitch |
 
 **关键点**：如果你只在单机上跑 2-4 卡、且不做张量并行（TP），NVSwitch 的价值不明显。但一旦你开始做模型并行（8 卡 TP 或 32+ 卡 DP），NVSwitch 的**任意 GPU 间全带宽**能力直接决定了你的 MFU。
 
 ### 🔧 自己动手验：你的 NVSwitch 工作正常吗？
 
 ```bash
-# 1. 检查 NVSwitch 健康状态（H100/B200 DGX 系统）
-nvidia-smi nvswitch -i 0 -q
-# 重要字段：
-#   Version（固件版本）
-#   Temperature（温度，正常 < 70°C）
-#   Link Errors（链路错误，应该为 0）
-#   Bandwidth Utilization（带宽利用率）
+# 1. 检查 NVLink 链路状态（GPU 侧视角，通用）
+nvidia-smi nvlink -s
+# 所有链路应为 Active；Disabled 说明该链路未起来
+# 看错误计数：nvidia-smi nvlink -e（CRC/replay 错误应为 0）
 
-# 2. 检查所有 NVSwitch 的链路状态
-nvidia-smi nvswitch -i 0 -q | grep -E "Link.*Status|Error|CRC"
-# 所有 Link Status 应该是 Active
-# CRC Error Count 应该为 0（CRC 错误说明信号质量有问题）
+# 2. 检查链路吞吐与拓扑
+nvidia-smi nvlink -g 0 -t        # 每张卡的 NVLink 吞吐
+nvidia-smi topo -m               # GPU 间是 NV# 还是 SYS/PIX
+
+# 3. NVSwitch 本身的健康状态需要平台工具（标准 nvidia-smi 没有 nvswitch 子命令）：
+#    · DGX 系统：nvsm show switch / nvsm show health（DGX OS 自带）
+#    · 非 DGX：NVIDIA Fabric Manager（NVSwitch 管理服务，随机型提供）
+#    · 或经 DCGM：dcgmi diag -r 3（含 NVLink/NVSwitch 诊断）
+#    字段关注：Temperature（< 70°C）、Link Errors / CRC 计数（应为 0）
+```
 
 # 3. 更彻底的测试：全互联带宽基准
 # 在 DGX 机箱内跑
 mpirun -np 8 --allow-run-as-root \
   nccl-tests/build/all_reduce_perf -b 1G -e 1G -f 2
-# H100 DGX 预期结果：> 400 GB/s（NVSwitch 全带宽）
-# 如果 < 300 GB/s → 可能是 NVSwitch 链路降速或 NCCL 配置问题
+# H100 DGX 预期结果：350-450 GB/s（Ring）/ 450-480 GB/s（启用 NCCL_NVLS_ENABLE）
+# 如果 < 350 GB/s（Ring）→ 可能是 NVSwitch 链路降速或 NCCL 配置问题
 
 # 4. 检查 NCCL 是否识别了 NVSwitch 拓扑
 NCCL_DEBUG=INFO mpirun -np 8 \
@@ -153,25 +158,25 @@ NCCL_DEBUG=INFO mpirun -np 8 \
 ### ⚠️ 常见误区
 
 - **误区**："NVSwitch = NVLink，有 NVLink 就不需要 NVSwitch"
-  - **实际**：NVLink 是**连接线**的协议，NVSwitch 是**交换芯片**。NVLink 可以点对点直连（8 卡以内），但超过 8 卡必须通过 NVSwitch 做全互联。**没有 NVSwitch，8 卡以上只能通过 PCIe 或网络绕路，带宽从 900 GB/s 掉到 64 GB/s。**
+  - **实际**：NVLink 是**连接线**的协议，NVSwitch 是**交换芯片**。NVLink 可以点对点直连，但超过 8 卡必须通过 NVSwitch 做全互联。**没有 NVSwitch，8 卡以上只能通过 PCIe 或网络绕路，单向带宽从 NVLink 的 450 GB/s 掉到 PCIe 5.0 x16 的 64 GB/s。**
 
 - **误区**："NVSwitch 解决了跨机通信的问题"
-  - **实际**：NVSwitch 只工作在**单机箱内**（8 卡 DGX 或 NVL72 的 72 卡）。跨机箱通信（DGX → DGX）还是要走 InfiniBand 或 RoCE。NVSwitch 4 的带宽是 1.8 TB/s 每 GPU，但跨机 IB NDR 只有 100 GB/s——**差了 18 倍**。这就是为什么大模型训练要把通信尽量限制在 NVSwitch 域内。
+  - **实际**：NVSwitch 只工作在**单机柜内**（8 卡 DGX 或 NVL72 的 72 卡）。跨机柜通信（DGX → DGX）还是要走 InfiniBand 或 RoCE。NVLink 5 每 GPU 单向带宽 900 GB/s，而跨机 IB NDR 只有 50 GB/s（单向，400 Gb/s）——**差了 18 倍**。这就是为什么大模型训练要把通信尽量限制在 NVSwitch 域内。
 
 - **误区**："NVSwitch 是 NVIDIA 独有技术，其他厂商没法做类似的东西"
-  - **实际**：AMD 有 Infinity Fabric，华为有 HCCS，Google TPU 用 3D Torus——每个厂商都有自己的互联技术。但 NVSwitch 的**大规模商用部署经验**（从 2018 年 DGX-2 到 2026 年 NVL72）是最成熟的。2025 年 OCP 成立了 ESUN（Ethernet for Scale-Up Networking）工作组（Broadcom、AMD、Meta、Microsoft 支持），目标是开放标准化 scale-up 网络，未来可能动摇 NVSwitch 的专有地位。
+  - **实际**：AMD 有 Infinity Fabric，华为有 HCCS，Google TPU 用 3D Torus——每个厂商都有自己的互联技术。但 NVSwitch 的**大规模商用部署经验**（从 2018 年 DGX-2 到 2026 年 NVL72）是最成熟的。2025 年 OCP 成立了 ESUN（Ethernet for Scale-Up Networking）工作组，**12 家创始成员包括 NVIDIA、AMD、Arista、Arm、Broadcom、Cisco、HPE Networking、Marvell、Meta、Microsoft、OpenAI、Oracle**，目标是开放标准化 scale-up 网络；ESUN 1.0 规范已于 2026 年发布，未来可能动摇 NVSwitch 的专有地位。
 
 ### 📊 底线数字速查
 
 | 指标 | NVSwitch 3（H100） | NVSwitch 4（B200） | NVSwitch 下一待（Rubin） |
 |------|-------------------|-------------------|------------------------|
-| 每 GPU NVLink 带宽 | 900 GB/s | **1,800 GB/s** | 待公布 |
-| 每交换芯片端口数 | 64 端口 | **72 端口** | 待公布 |
-| 总交换带宽 | 57.6 TB/s | **259.2 TB/s** | 待公布 |
+| 每 GPU NVLink 带宽 | 900 GB/s（双向） | **1,800 GB/s（双向）** | 待公布 |
+| 每交换芯片端口数 | 64 端口 | **72 端口**（一个 switch tray 两颗芯片合计 144） | 待公布 |
+| 单芯片交换吞吐 | 13.6 Tb/s | **57.6 Tb/s ≈ 7.2 TB/s** | 待公布 |
 | 延迟 | ~100 ns | **<100 ns** | 待公布 |
-| 最大单域 GPU 数 | 256（二级交换） | **72（NVL72）或更大** | 待公布 |
+| 最大单域 GPU 数 | 256（二级交换） | **72（NVL72）** | 待公布 |
 | 功耗 | ~75W | ~100W | 待公布 |
-| 跨域瓶颈 | IB NDR ~100 GB/s | IB NDR ~100 GB/s | CX-9 1.6T |
+| 跨域瓶颈 | IB NDR ~50 GB/s（单向，单卡） | IB NDR ~50 GB/s（单向，单卡） | CX-9 1.6T |
 | 价格 | DGX 机箱包含 | DGX 机箱包含 | 待公布 |
 
 ### 💡 一句话记住
@@ -184,7 +189,7 @@ NCCL_DEBUG=INFO mpirun -np 8 \
 
 NVSwitch 很好地解决了**单机内**所有 GPU 的高速通信问题。但当你需要从 8 卡扩展到 1,000 卡时，**跨机通信**怎么解决？
 
-NVLink/NVSwitch 最高做到 256 卡全互联（通过二级交换），但 1,000 卡以上怎么办？
+NVLink/NVSwitch 的单域规模是有上限的——Hopper 时代（NVLink 4 + NVSwitch 3）通过二级交换最高做到 256 卡全互联，Blackwell 的 NVLink 5 单域则是 72 卡（NVL72）。再往上怎么办？
 
 → **这就是 03-网络篇 要回答的问题**：机间通信靠 InfiniBand 或 RoCE。
 
@@ -193,6 +198,6 @@ NVLink/NVSwitch 最高做到 256 卡全互联（通过二级交换），但 1,00
 ---
 
 > **参考资料**：
-> - [NVIDIA NVSwitch 官方介绍](https://www.nvidia.com/en-us/data-center/nvswitch/)
-> - [DGX SuperPOD 架构白皮书](https://www.nvidia.com/en-us/data-center/dgx-superpod/)
-> - [Hot Chips 2022: NVIDIA NVSwitch 3 演示](https://www.servethehome.com/nvidia-nvlink4-nvswitch-at-hot-chips-34/)
+> - [NVIDIA GB200 NVL72 官方页面](https://www.nvidia.com/en-us/data-center/gb200-nvl72/)
+> - [NVIDIA DGX SuperPOD 用户指南](https://docs.nvidia.com/dgx-superpod/)
+> - [ServeTheHome: NVIDIA NVLink4 / NVSwitch at Hot Chips 34](https://www.servethehome.com/nvidia-nvlink4-nvswitch-at-hot-chips-34/)

@@ -1,6 +1,6 @@
 # Q: AI 集群和传统 HPC 集群有什么不同？
 
-## 为什么会有这个问题
+## 为什么诞生这个问题？
 
 你可能听说过"超级计算机"这个概念——比如中国的"天河"、"神威·太湖之光"，或者 TOP500 榜单上的那些巨无霸。
 
@@ -11,7 +11,7 @@ AI 集群也属于"集群"的一种，但它的设计逻辑和传统 HPC 有本�
 | 维度 | 传统 HPC | AI 训练集群 |
 |------|---------|------------|
 | **计算模式** | 每个节点独立跑不同的任务 | 所有节点协同训练同一个模型 |
-| **通信模式** | MPI 点对点通信为主 | 集体通信（All-Reduce）占主导 |
+| **通信模式** | 点对点与集体通信混杂（MPI_Send/Recv、Allreduce、Allgather…） | 高频、固定模式的集体通信（All-Reduce）为主 |
 | **通信频率** | 低（秒级、分钟级同步一次） | 极高（每次迭代 ~0.1 秒同步一次） |
 | **任务时长** | 分钟到小时 | 天到周 |
 | **容错方式** | Checkpoint + 重跑 | Checkpoint + 重跑 + Elastic Training |
@@ -35,8 +35,8 @@ AI 集群也属于"集群"的一种，但它的设计逻辑和传统 HPC 有本�
 
 步骤 3 中，**所有 GPU 必须等最慢的那个完成**。这意味着：
 
-- **HPC 集群**：100 个节点里 99 个等 1 个，损失 1%
-- **AI 集群**：100 个 GPU 等 1 个，损失 100%（都闲着）
+- **HPC 集群**：节点间大多松耦合，个别节点变慢通常只影响局部，整体损失很小
+- **AI 集群**：所有 GPU 同步训练，100 个 GPU 等最慢的那 1 个，整体一起变慢
 
 所以 AI 集群对网络的**确定性、低延迟、无抖动**有极端要求（[[03-网络篇/03-为什么大集群IB有不可替代的优势]]）。
 
@@ -72,7 +72,7 @@ AI 集群也属于"集群"的一种，但它的设计逻辑和传统 HPC 有本�
 ```
 Q1：你的网络是按"点对点通信"还是"集体通信"设计的？
 
-  HPC 思路：MPI 点对点为主，网络过订阅（oversubscription）2:1 甚至 4:1 是常态
+  HPC 思路：通信以点对点为主、集体通信为辅，网络过订阅（oversubscription）2:1 甚至 4:1 是常态
   AI 思路：All-Reduce 是主角，网络必须不阻塞（non-blocking），过订阅 = 性能灾难
   → 如果用传统 HPC 的 4:1 过订阅网络跑 AI 训练，MFU 直接掉 30-50%
 
@@ -84,8 +84,8 @@ Q2：你的存储是按"一次写入、多次读取"还是"频繁大文件读写
 
 Q3：你如何处理慢节点？
 
-  HPC 思路：100 个节点独立跑不同任务，1 个慢节点只影响 1% 的工作
-  AI 思路：所有 GPU 同步训练，1 个慢节点拖慢 100% 的 GPU
+  HPC 思路：节点独立跑不同任务，个别慢节点只影响局部工作
+  AI 思路：所有 GPU 同步训练，1 个慢节点会拖慢整个作业
   → AI 集群必须有慢节点检测机制（如 Guard/Slurm 健康检查）
 ```
 
@@ -101,34 +101,37 @@ Q3：你如何处理慢节点？
 # 先测 2 节点
 mpirun -np 16 --host node1,node2 \
   nccl-tests/build/all_reduce_perf -b 128M -e 128M -f 2
-# 记录带宽 BW_2
+# 记录 algbw（或聚合吞吐）BW_2
 
 # 再测 4 节点
 mpirun -np 32 --host node1,node2,node3,node4 \
   nccl-tests/build/all_reduce_perf -b 128M -e 128M -f 2
-# 记录带宽 BW_4
+# 记录 algbw（或聚合吞吐）BW_4
 
-# 如果 BW_4 < BW_2 × 2（节点数翻倍带宽没翻倍）→ 网络过订阅了
-# AI 训练要求：BW_N ≈ BW_2 × (N/2) × 0.85
+# 注意：nccl-tests 打印的 busbw 是"归一化"吞吐，本就与卡数基本无关，
+#       单看它不随节点数增长属正常现象，不能用来判断瓶颈。
+# 正确做法：看 algbw（或换算成聚合吞吐）是否随节点数近线性增长（效率约 0.85），
+#           同时确认 busbw 保持平稳——busbw 明显下降才说明网络过订阅/有热点。
 
 # 2. 检查存储系统的元数据性能
 time ls -l /shared/dataset/ | wc -l
 # 10 万文件 → 预期 < 5 秒
 # 如果 > 30 秒 → 存储系统不适合 AI（元数据瓶颈）
 
-# 3. 检查调度器是否支持 Gang Scheduling
-# Slurm 中查看是否配置了 gang scheduling：
-scontrol show config | grep -i gang
-# 如果输出为空 → 不支持，可能导致多机任务死锁
+# 3. 检查调度器能否保证多机任务"整组分配"（all-or-nothing）
+# Slurm 对多节点分配默认就是 all-or-nothing，可用 --exclusive 申请整节点：
+scontrol show config | grep HealthCheck
+# 关注 HealthCheckProgram / HealthCheckInterval（慢节点、坏节点检测）
+# 注：Slurm 早已移除 sched/gang 插件，gang 语义在 K8s 侧靠 PodGroup 实现
 ```
 
 ### ⚠️ 常见误区
 
 - **误区**："TOP500 超算都能跑 AI，用 HPC 的设计思路肯定没错"
-  - **实际**：TOP500 超算的瓶颈在于 FP64 科学计算，AI 训练是 FP8/BF16 的天下。2026 年的超算榜单里，超过 70% 的新增算力来自 AI 专用集群（如 xAI Grok 的 20 万张 H100），而不是传统 HPC。用 HPC 的设计成本做 AI 集群，**网络和存储的投资优先级完全反了**。
+  - **实际**：TOP500 超算的瓶颈在于 FP64 科学计算，AI 训练是 FP8/BF16 的天下。近年来新增算力越来越多来自 AI 专用集群（如 xAI 的 Colossus，H100 规模达数十万卡量级），而不是传统 HPC。用 HPC 的设计成本做 AI 集群，**网络和存储的投资优先级完全反了**。
 
 - **误区**："存储够大就行了，速度慢一点没关系"
-  - **实际**：HPC 的存储读写模式是"一次写入、多次读取、任务结束清理"。AI 训练每 30-45 分钟写一次数百 GB 的 Checkpoint + 持续读取 TB 级训练数据。**NVIDIA 2026 年建议：每张 GPU 需要 0.5 GB/s 读 + 0.25 GB/s 写**。一个 10,000 GPU 集群需要 5 TB/s 读、2.5 TB/s 写——这个量级只有并行文件系统能做到。
+  - **实际**：HPC 的存储读写模式是"一次写入、多次读取、任务结束清理"。AI 训练每 30-45 分钟写一次数百 GB 的 Checkpoint + 持续读取 TB 级训练数据。**NVIDIA DGX SuperPOD 参考架构把存储性能按负载分成三档：Light 1 GB/s、Medium 2 GB/s、High 4 GB/s（读带宽/每 GPU）**，LLM 预训练通常按 Medium 档规划。一个 10,000 GPU 集群就要 20 TB/s 读、15 TB/s 写——这个量级只有并行文件系统能做到。
 
 - **误区**："HPC 和 AI 集群用一样的 InfiniBand 网络，没区别"
   - **实际**：HPC 的 MPI 通信可以容忍部分网络拥塞（因为点对点通信），AI 训练的 All-Reduce 是**所有 GPU 同时同步**，任何一条链路的抖动都会卡住全局。这就是为什么 Meta 在 Llama 3 训练中选择了 RoCE（尽管不如 IB 稳定）——因为他们的网络拓扑专门为 All-Reduce 做了 Rail-Optimized 设计，不是通用的 HPC 拓扑。
@@ -137,13 +140,13 @@ scontrol show config | grep -i gang
 
 | 维度 | HPC 集群 | AI 训练集群 | 差异倍数 |
 |------|---------|------------|---------|
-| 精度需求 | FP64（双精度） | FP8/BF16（混合精度） | 算力密度差 8-16× |
+| 精度需求 | FP64（双精度） | FP8/BF16（混合精度） | 算力差 ~29×（H100：FP64 34 vs BF16 稠密 989 TFLOPS） |
 | 网络过订阅比例 | 4:1 可接受 | **1:1（不阻塞）** | 网络成本差 4× |
-| 每 GPU 存储吞吐 | ~0.1 GB/s | **~0.5 GB/s 读 + 0.25 GB/s 写** | 5-7.5× |
-| 慢节点影响 | 影响 1% 的任务 | **拖慢 100% 的 GPU** | 容忍度差 100× |
-| 通信模式 | 点对点为主 | **集体通信（All-Reduce）** | 网络需求本质不同 |
+| 每 GPU 存储吞吐 | ~0.1 GB/s | **1-4 GB/s 读（Light→High 档）** | 10-40× |
+| 慢节点影响 | 局部影响，可容忍 | **拖慢整个训练作业** | 容忍度差异极大 |
+| 通信模式 | 点对点 + 集体通信混杂 | **高频固定模式的集体通信（All-Reduce）** | 网络需求本质不同 |
 | 单任务典型时间 | 分钟~小时 | **天~周** | 10-100× |
-| 2026 年新增算力 | 30% | **70%** | — |
+| 新增算力来源 | 以传统 HPC 为主 | **AI 专用集群为主** | — |
 
 ### 💡 一句话记住
 
@@ -163,6 +166,7 @@ scontrol show config | grep -i gang
 
 > **参考资料**：
 > - [TOP500 榜单](https://top500.org)
-> - [NVIDIA DGX SuperPOD 白皮书](https://www.nvidia.com/en-us/data-center/dgx-superpod/)
+> - [NVIDIA DGX SuperPOD 参考架构文档](https://docs.nvidia.com/dgx-superpod/)
+> - [DGX SuperPOD 参考架构：存储架构（存储性能分档）](https://docs.nvidia.com/dgx-superpod/reference-architecture-scalable-infrastructure-h100/latest/storage-architecture.html)
 > - [Google TPU v4: "An Optically Reconfigurable Supercomputer for Machine Learning" (ISCA 2023)](https://arxiv.org/abs/2304.01433)
 > - [Meta 关于 Llama 3 训练基础设施的技术博文 (2024)](https://ai.meta.com/research/publications/the-llama-3-herd-of-models/)

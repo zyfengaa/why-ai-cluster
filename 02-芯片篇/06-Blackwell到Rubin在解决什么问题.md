@@ -2,7 +2,7 @@
 
 ## 为什么会有这个问题
 
-2022 年 Hopper（H100）发布，2024 年 Blackwell（B200）发布，2025 年 Blackwell Ultra（GB300/B300）发布，2026 年 Rubin 开始量产。短短 4 年，NVIDIA 连跨三代架构。
+2022 年 Hopper（H100）发布，2024 年 Blackwell（B200）发布，2025 年 Blackwell Ultra（GB300/B300）发布，2026 年 CES 首度揭幕 Vera Rubin 平台、量产（NVL144 系统）计划在下半年。短短 4 年，NVIDIA 连跨三代架构。
 
 每一代都在回答同一个核心问题：**"怎么让大模型训练更快、更便宜？"**
 
@@ -15,12 +15,15 @@
 | 架构 | Hopper | Blackwell | Blackwell Ultra | Vera Rubin |
 | 晶体管 | 800 亿 | 2,080 亿 | 2,080 亿+ | 未公开 |
 | 制程 | TSMC 4N | TSMC 4NP | TSMC 4NP | TSMC 3nm |
-| 显存 | 80 GB HBM3 | 192 GB HBM3e | **288 GB** HBM3e | 下一代 HBM4 |
+| 显存 | 80 GB HBM3 | 192 GB HBM3e | **288 GB** HBM3e | **288 GB HBM4**（Rubin Ultra 为 1 TB HBM4e） |
 | 显存带宽 | 3.35 TB/s | 8 TB/s | 8 TB/s | 更高 |
 | 功耗 | 700 W | 1,000 W | **1,400 W** | 未公开 |
-| NVLink | 4.0 (900 GB/s) | 5.0 (1,800 GB/s) | 5.0 (1,800 GB/s) | 6.0 |
-| FP8 算力 | 4 PFLOPS | 9 PFLOPS | 20 PFLOPS | 约 100 PFLOPS |
+| NVLink | 4.0 (900 GB/s，双向) | 5.0 (1,800 GB/s，双向) | 5.0 (1,800 GB/s，双向) | 6.0 |
+| FP8 张量算力（稠密 / 稀疏） | 1,979 / 3,958 TFLOPS | 4,500 / 9,000 TFLOPS | — | 约 25 PFLOPS（NVFP4 稠密值的一半） |
+| FP4 张量算力（稠密 / 稀疏） | 不支持 | — | ~15 / ~30 PFLOPS | ~50 PFLOPS NVFP4（稠密） |
 | 网络 | CX-7 (400G) | CX-8 (800G) | CX-8 (800G→1.6T) | CX-9 |
+
+> 注：本表统一使用**稠密 / 稀疏**两个口径，且优先给出稠密值——厂商常宣传的"峰值"多为稀疏值，做 MFU、训练时间、加速比估算时必须用稠密值。H100 不支持 FP4；Rubin 的算力以 **NVFP4** 为主要口径（约 50 PFLOPS 稠密），其 FP8 约为 NVFP4 的一半。
 
 **核心趋势**：每一代都围绕这四个方向：
 1. **更大显存**：让更大的模型能装进单卡，减少模型并行开销
@@ -37,11 +40,11 @@
 H100 是第一个原生支持 **FP8 训练** 的 GPU，引入了 Transformer Engine。它的意义在于验证了几个关键能力：
 - FP8 训练可以达到和 FP16 一样的精度
 - 大规模集群（万卡级别）可以稳定运行
-- NVLink + NVSwitch 4.0 方案成熟
+- NVLink 4.0 + NVSwitch 3.0 方案成熟（注意：NVSwitch 的世代号与 GPU 侧的 NVLink 代数不是同一套编号）
 
 ### B200（Blackwell）— 显存翻倍
 
-Blackwell 是两个 GPU die 通过 NVLink 合并为一个逻辑 GPU：
+Blackwell 是两颗 GPU die 通过 **NV-HBI**（die-to-die 互连，**10 TB/s**）合并为一个逻辑 GPU：
 
 ```
 传统方案：                           Blackwell：
@@ -51,8 +54,8 @@ Blackwell 是两个 GPU die 通过 NVLink 合并为一个逻辑 GPU：
 │  4 PFLOPS    │                  │ 96 GB   │ 96 GB  │
 └──────────────┘                  │ 4.5PF   │ 4.5PF  │
                                   └────────┴────────┘
-                                  通过 NVLink 5.0 桥接
-                                  逻辑单卡：192 GB, 9 PFLOPS
+                                  两颗 die 通过 NV-HBI（10 TB/s）桥接
+                                  逻辑单卡：192 GB, 9 PFLOPS（FP8 稀疏）
 ```
 
 **核心价值**：更大的显存意味着很多以前需要 TP（张量并行）的模型，现在单卡就能放了。这极大地简化了大规模训练的网络拓扑。
@@ -61,7 +64,7 @@ Blackwell 是两个 GPU die 通过 NVLink 合并为一个逻辑 GPU：
 
 GB300 不是简单的提频。它的核心变化：
 - **288 GB HBM3e**（12 层堆叠），可以装下 70B 模型（FP16 = 140 GB）还剩空间
-- **FP4 算力达到 15-20 PFLOPS**，专为推理优化
+- **FP4 算力：稠密 ~15 PFLOPS / 稀疏 ~30 PFLOPS**，专为推理优化
 - **CX-8 网卡 800 Gb/s**（可升级 1.6T），匹配万卡集群网络需求
 - **液冷成为标准配置**（1,400W 风冷已无法承受）
 
@@ -69,9 +72,9 @@ GB300 不是简单的提频。它的核心变化：
 
 ### Rubin — 下下代
 
-黄仁勋在 CES 2026 宣布 Rubin 平台全面量产。关键信息：
-- **Vera CPU**：每瓦性能提升 2 倍（Neoverse V2 架构）
-- **Rubin GPU**：算力提升 5 倍（FP8 约 100 PFLOPS），使用 TSMC 3nm
+CES 2026 上 NVIDIA 首度揭幕 Vera Rubin 平台，量产（NVL144 系统）计划在 2026 年下半年。关键信息：
+- **Vera CPU**：**88 个定制 Arm v9 核（代号 "Olympus"）、176 线程**，通过 **NVLink-C2C 1.8 TB/s** 与 Rubin GPU 相连；官方称每瓦性能为上一代的 2 倍（注：Neoverse V2 是 **Grace** 的架构，不是 Vera 的）
+- **Rubin GPU**：算力大幅提升（NVFP4 稠密约 50 PFLOPS，FP8 约为其一半），使用 TSMC 3nm
 - **NVLink 6 + CX-9 + Spectrum-6**：全套互联升级
 - 训练 10T 参数模型只需要 Blackwell **四分之一的系统规模**
 - **但存在延迟风险**：HBM4 认证耗时、液冷调校等问题，2026 年出货占比下修至 22%
@@ -82,9 +85,9 @@ GB300 不是简单的提频。它的核心变化：
 
 | 系列 | 占比 | 状态 |
 |------|------|------|
-| **GB300/B300（Blackwell Ultra）** | **71%** | ✅ 已全面量产，主力产品 |
-| **GB200/B200（Blackwell）** | 少量 | ⚠️ 持续供货至 2026 下半年 |
-| **Vera Rubin** | **22%** | 🟠 已量产，但面临延迟，占比下调 |
+| **Blackwell 系列（GB300/B300 为主，含 GB200/B200）** | **71%** | ✅ 已全面量产，主力产品 |
+| **GB200/B200（Blackwell 上一代）** | 计入上行合计 | ⚠️ 作为上一代产品持续供货至 2026 下半年，只是不再贡献增量 |
+| **Vera Rubin** | **22%** | 🟠 计划 2026 下半年量产（NVL144），面临 HBM4 认证延迟，占比下调 |
 | **H200（Hopper）** | 7% | 🔴 占比下滑 |
 
 **行业结论**：到 2026 年底之前，Blackwell 系列（尤其是 GB300/B300）仍是这个星球上 AI 训练的主力硬件。
@@ -98,7 +101,7 @@ GB300 不是简单的提频。它的核心变化：
 | 你的需求 | 推荐选型 | 理由 |
 |---------|---------|------|
 | 微调 7B-70B，单节点能搞定 | **H100 / H200** | 成本低，供应充足，8×80GB=640GB 显存对大多数模型够用 |
-| 预训练 70B+，需要极致算力 | **GB300 B200** | 288GB 单卡显存，很多模型不需要张量并行就能装下 |
+| 预训练 70B+，需要极致算力 | **GB300 / B300** | 288GB 单卡显存，很多模型不需要张量并行就能装下 |
 | 长上下文训练（128K+） | **B200 / GB300** | 更大显存 = 更长的序列长度 |
 | 推理部署，成本敏感 | **H200 / B200**（FP8 推理） | FP4/FP8 推理算力差距大，B200 比 H100 快 2-3 倍 |
 | 国产化要求 | **昇腾 910C / 国产 IB 方案** | 华为昇腾 + 国产 IB 的组合正在成熟（[[05-为什么训练还是首选NVIDIA]]） |
@@ -122,7 +125,7 @@ nvidia-smi -q -d POWER
 ### ⚠️ 常见误区
 
 - **误区**："买最新的 Rubin，三年不用换"
-  - **实际**：Rubin 2026 年出货占比只预计 22%，2027 年才量产爬坡。而且 Rubin 用 **HBM4 和 3nm 全新制程**，初代产品通常有良率和稳定性问题。**对于生产环境，买 Blackwell 系列（GB300/B300）更稳妥。**
+  - **实际**：Rubin 平台在 CES 2026 才首度揭幕，量产（NVL144 系统）计划在 2026 年下半年，2026 年出货占比预计仅 22%。而且 Rubin 用 **HBM4 和 3nm 全新制程**，初代产品通常有良率和稳定性问题。**对于生产环境，买 Blackwell 系列（GB300/B300）更稳妥。**
 - **误区**："FP8 训练精度不够，还是用 BF16 保险"
   - **实际**：2025-2026 年 FP8 训练（H100 起支持）已经在学术界和工业界被广泛验证，精度损失 < 0.1% 的同时吞吐提升 2x。**BF16 作为主力精度的时代正在被 FP8 取代。**
 - **误区**："GPU 算力翻倍 = 训练速度翻倍"
@@ -153,13 +156,10 @@ GPU 的进化一直在朝着同一个方向：**更强的单卡能力 + 更快�
 这个问题直接引出了液冷和集群能源管理的讨论。
 
 → [[07-功率越来越高散热怎么办]]
-→ [[09-前沿与实践/02-液冷会成为标配吗]]
+→ [[09-前沿与实践篇/02-液冷会成为标配吗]]
 
 ---
 
 > **参考资料**：
-> - [TrendForce：2026 年 Blackwell 将占 NVIDIA 高端 GPU 出货逾 7 成 (2026.04)](https://www.trendforce.com/presscenter/news/20260408-13002.html)
-> - [CES 2026 黄仁勋主题演讲](https://www.nvidia.com/en-us/events/ces/)
-> - [TechPowerUp：GB300 Blackwell Ultra 规格爆料](https://www.techpowerup.com/)
-> - [NVIDIA GTC 2026：DGX Station 发布](https://www.nvidia.com/en-us/gtc/)
-> - [SemiAnalysis: NVIDIA GPU Roadmap Deep Dive (2025)](https://semianalysis.com/)
+> - [TrendForce：2026 年 Blackwell 将占 NVIDIA 高端 GPU 出货逾 7 成 (2026.04)](https://www.trendforce.com/presscenter/news/20260408-13003.html)
+> - [DataCenterDynamics: NVIDIA announces Vera Rubin Superchip for late 2026](https://www.datacenterdynamics.com/en/news/nvidia-announces-vera-rubin-superchip-for-late-2026/)

@@ -2,7 +2,7 @@
 
 ## 为什么会有这个问题
 
-当你走进任何一个国家级超算中心——太湖之光、Fugaku、Frontier——问他们用什么调度器，答案几乎都是 **Slurm**。它从 2002 年诞生，已经统治 HPC 调度 20 多年。
+当你走进任何一个国家级超算中心——太湖之光、Frontier、Perlmutter——问他们用什么调度器，答案几乎都是 **Slurm**。它从 2002 年诞生，已经统治 HPC 调度 20 多年。
 
 在 AI 浪潮中，Slurm 被"挖"出来管理 GPU 集群。不是因为它最时尚，而是因为 **大规模分布式训练的需求和 HPC 批处理作业几乎一模一样**。
 
@@ -21,7 +21,7 @@ Slurm（Simple Linux Utility for Resource Management）解决的核心问题：
 "资源到位前不执行，资源释放前不让道"
 ```
 
-这是 Slurm 和 Kubernetes 最大的区别：**Slurm 是"预约式"的，Kubernetes 是"抢占式"的。**
+这背后是 Slurm 和 Kubernetes 最本质的区别，但**并不是"预约式 vs 抢占式"**——Slurm 的 reservation 是需手动 `scontrol create reservation` 的**可选功能**，默认同样是"资源可用即调度 + backfill"；Slurm 也支持抢占（`PreemptType`/`PreemptMode`），而 K8s 原生的 Pod 抢占语义其实很弱。真正的区别有两点：**默认分配的原子性**（Slurm 对多节点作业天然 all-or-nothing，K8s 原生则逐个 Pod 调度）与**负载模型**（批处理队列 vs 声明式期望状态）。
 
 ### Slurm 的核心组件
 
@@ -81,8 +81,8 @@ SwitchName=spine01 Switches=leaf01,leaf02
 | 局限 | 表现 | 影响 |
 |------|------|------|
 | **无容器原生支持** | 需借助 Pyxis/Enroot 或 Singularity | 开发和部署环境不一致 |
-| **无自愈能力** | 节点挂了，任务就挂了 | 需要外部脚本监控和重提交 |
-| **无弹性调度** | 任务一旦启动，资源固定 | 不能动态扩缩 |
+| **自愈能力弱于 K8s** | 无 Pod 级控制器；节点故障需显式启用 `--requeue` + 应用侧 checkpoint 才能自动重跑 | 无 K8s 式的声明式自愈 |
+| **弹性弱于 K8s** | 任务启动后资源固定；弹性要靠 `--requeue` + checkpoint 重跑实现 | 无 HPA 式动态扩缩 |
 | **无原生推理服务** | Slurm 不是为长运行服务设计的 | 推理服务需要额外方案 |
 | **API 不够 RESTful** | 官方 API 不够云原生 | 和 CI/CD 集成困难 |
 
@@ -118,6 +118,8 @@ SwitchName=spine01 Switches=leaf01,leaf02
 # 加载环境
 module load cuda/12.4
 module load nccl/2.21
+# 非交互 batch 脚本里 conda activate 前必须先初始化 shell hook，否则会报 "conda: command not found"
+source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate llama-training
 
 # NCCL 调优
@@ -163,7 +165,7 @@ scontrol show job <jobid> | grep -E "Reason|Priority|State|Nodes"
 ### ⚠️ 常见误区
 
 - **误区**："Slurm 太老了，不适合 AI"
-  - **实际**：Frontier（世界第一超算）用 Slurm 管理 37,888 张 AMD MI250X GPU，xAI 的 Colossus 集群（200K H100）也用 Slurm。**老 ≠ 不适合**，Slurm 的大规模调度能力在 AI 领域同样关键。
+  - **实际**：Frontier（37,888 张 AMD MI250X GPU）用 Slurm 管理，CoreWeave、Oracle OCI 等大规模 GPU 云也在用 Slurm 调度训练任务（可参见 SchedMD 官方客户列表）。**老 ≠ 不适合**，Slurm 的大规模调度能力在 AI 领域同样关键。
 
 - **误区**："Slurm 不支持容器"
   - **实际**：Slurm + Pyxis/Enroot 是 NVIDIA 推荐的集群容器方案，性能无损。2026 年 Pyxis 已经成为 Slurm AI 集群的事实标准容器运行时。
@@ -175,18 +177,18 @@ scontrol show job <jobid> | grep -E "Reason|Priority|State|Nodes"
 
 | 指标 | Slurm | Kubernetes | 备注 |
 |------|-------|-----------|------|
-| 最大集群规模 | ~30,000 节点 | ~5,000 节点 | Slurm 上限更高 |
+| 最大集群规模 | 10 万+ 节点（公开记录 122,880 节点） | ~5,000 节点 | Slurm 上限更高 |
 | 作业启动延迟 | ~1-2 s | ~5-30 s（含 Pod 调度） | Slurm 更快 |
 | 批处理调度 | ✅ 原生 | ⚠️ 需扩展组件 | Slurm 天然优势 |
 | 推理服务 | ❌ 需要额外方案 | ✅ 原生 | K8s 天然优势 |
-| 弹性伸缩 | ❌ 不支持 | ✅ 原生 | K8s 优势 |
-| 自愈 | ❌ 不支持 | ✅ 原生 | K8s 优势 |
+| 弹性伸缩 | ⚠️ 需 `--requeue` + checkpoint | ✅ 原生 | K8s 优势 |
+| 自愈 | ⚠️ 需显式 `--requeue`，无声明式自愈 | ✅ 原生 | K8s 优势 |
 | 拓扑感知 | ✅ native | ⚠️ 需配置 | Slurm 更直接 |
 | 学习曲线 | 低（HPC）↔ 高（云原生） | 低（云原生）↔ 高（HPC） | 取决于背景 |
 
 ### 💡 一句话记住
 
-> **"Slurm 是 AI 集群调度器的'老兵'——2002 年诞生，经过万卡超算 20 年的考验。它的设计哲学是'资源到位前不执行'，天然适合大规模批处理训练。2026 年，Slurm 仍然统治着 80% 以上的大型 GPU 集群，但它的角色正从'唯一选项'变为'训练调度的最佳选项'。"**
+> **"Slurm 是 AI 集群调度器的'老兵'——2002 年诞生，经过万卡超算 20 年的考验。它的设计哲学是'资源到位前不执行'，天然适合大规模批处理训练。2026 年，TOP500 中仍有约 60-65% 的系统跑在 Slurm 上，但它的角色正从'唯一选项'变为'训练调度的最佳选项'。"**
 
 ---
 
@@ -196,14 +198,16 @@ Slurm 是 HPC 的传统选择。但 Kubernetes 在 AI 场景中正在快速崛�
 
 它们不是对手，而是互补。2026 年最大的趋势是 **Slurm on Kubernetes（Slinky/SUNK）**——把两者结合起来。
 
-→ [[03-调度篇/03-Kubernetes为什么在AI场景崛起]]
+→ [[07-调度篇/03-Kubernetes为什么在AI场景崛起]]
 → [[04-NVIDIA收购SchedMD意味着什么]]
 
 ---
 
 > **参考资料**：
-> - ["Slurm vs. Kubernetes in the Age of AI" — HPCwire (2026)](https://www.hpcwire.com/)
-> - [Spheron: "Slurm for AI Workloads on GPU Cloud" (2026)](https://www.spheron.network/blog/)
+> - ["What Does NVIDIA's Acquisition of SchedMD Mean for Slurm?" — HPCwire (2026)](https://www.hpcwire.com/2026/01/06/what-does-nvidias-acquisition-of-schedmd-mean-for-slurm/)
 > - [Crusoe: "Slurm on Crusoe Managed Kubernetes" (2026)](https://www.crusoe.ai/resources/blog/slurm-on-crusoe-managed-kubernetes-how-we-built-managed-gpu-training-infrastructure)
 > - [Slurm 官方文档](https://slurm.schedmd.com/documentation.html)
-> - [MLsysbook.ai: "Fleet Orchestration" (2026)](https://mlsysbook.ai/)
+> - [Slurm 抢占（Preemption）文档](https://slurm.schedmd.com/preempt.html)
+> - [Slurm 多因子优先级（Multifactor Priority）文档](https://slurm.schedmd.com/priority_multifactor.html)
+> - [Slurm 大规模集群管理指南（Large Cluster Administration）](https://slurm.schedmd.com/big_sys.html)
+> - [MLSysBook Vol.II: "Fleet Orchestration" (2026)](https://mlsysbook.ai/vol2/fleet_orchestration/fleet_orchestration.html)

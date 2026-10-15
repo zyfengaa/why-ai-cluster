@@ -51,7 +51,7 @@ NFS 的三个致命缺陷：
 │   对象存储服务器 3（OSS3）──── OST3（硬盘组）   到这 128  │
 │   ...                             个 OST              │
 │                                                     │
-│   高速网络互连（IB/RoCE，40-100 Gb/s）                │
+│   高速网络互连（IB/RoCE，200 Gb/s HDR / 400 Gb/s NDR）│
 └────────────────────┬────────────────────────────────┘
                      │
      ┌───────────────┼───────────────┐
@@ -66,7 +66,7 @@ NFS 的三个致命缺陷：
 
 | NFS 问题 | 并行文件系统方案 |
 |---------|----------------|
-| 单点带宽 | **N 台存储服务器** = N 倍带宽，128 个 OST 可达 480 GB/s |
+| 单点带宽 | **N 台存储服务器** = N 倍带宽，128 个 **NVMe** OST 可达 480 GB/s（约 3.75 GB/s/OST；此值仅在 NVMe OST 下成立，HDD 组成的 OST 典型只有 1-1.5 GB/s） |
 | 单点故障 | 多台 OSS，一台挂了数据仍在其他节点可读 |
 | 元数据慢 | **独立的元数据服务器**（MDS），或分布式元数据（WEKA） |
 | 文件锁冲突 | 分布式锁管理，支持并行写入同一文件的不同部分 |
@@ -79,7 +79,7 @@ NFS 的三个致命缺陷：
 |------|--------|--------|
 | **Lustre** | HPC 老兵，开源免费 | 有专业 HPC 运维团队 |
 | **WEKA** | NVMe 原生，AI 时代新贵 | 追求极致 GPU 利用率 |
-| **GPFS（Spectrum Scale）** | IBM 企业级，功能全 | 金融/大型企业 |
+| **IBM Storage Scale（原 GPFS）** | IBM 企业级，功能全 | 金融/大型企业 |
 | **BeeGFS / BeeOND** | 轻量，易部署 | 小规模或临时任务 |
 
 → [[03-Lustre-vs-WEKA-vs-GPFS]]
@@ -99,20 +99,24 @@ Q1：你的数据集多大？有多少文件？
   AI 训练数据集通常包含数百万到数亿个文件（未打包）
   → 如果 `ls -l /data | wc -l` 超过 10 万，且 ls 耗时 > 30 秒 → NFS 元数据瓶颈
 
-Q2：你的训练任务每步需要读多少数据？
+Q2：你的训练任务每秒需要读多少数据？
 
-  单 GPU 数据传输率 = batch_size × 序列长度 × 精度字节 × 每步 GPU 数
-  以 32 GPU 训练 LLaMA 70B 为例：
-  4 × 4096 × 2 × 32 = 1 GB/步
-  如果每步 0.5 秒 → 需要 2 GB/s 读吞吐
-  → 单台 NFS（1-2 GB/s 上限）刚好临界
+  读带宽需求 ≈ 单卡 token 吞吐 × 每 token 折算字节数 × GPU 卡数
+  以 32 卡训练 LLaMA 70B 为例：
+  4096 token/s × 4096 B/token × 32 卡 ≈ 0.5 GB/s
+  → 单看读吞吐，单台 NFS（1-2 GB/s 上限）似乎够用；但这是理想最小值，
+     多客户端并发读会摊薄单点带宽，Checkpoint 写入还会与读取抢占带宽，
+     实际可用读带宽往往不足 1 GB/s
 
 Q3：你的 Checkpoint 写需要多快？
 
-  Checkpoint 大小 = 模型参数 + 优化器状态
-  70B（FP16）：140 GB + 280 GB = 420 GB
-  NFS 写速度 ~1 GB/s → 420 秒 ~7 分钟 GPU 空闲
-  → 如果每天 Checkpoint 32 次 → 每天 3.7 小时 GPU 白等
+  Checkpoint 大小 = 权重 + 优化器状态（Adam 动量 m + 方差 v）+ master weights
+  70B（BF16，按 16 bytes/参数口径）：完整可续训状态 ≈ 1.12 TB
+  （fp16 权重 140 GB + fp16 梯度 140 GB + fp32 master 280 GB + Adam m/v 560 GB；
+    NVIDIA 官方按组件拆解口径约 782 GB）
+  NFS 写速度 ~1 GB/s → 1120 秒 ~19 分钟 GPU 空闲
+  → 如果每天 Checkpoint 32 次 → 每天 ~10 小时 GPU 白等
+  （未考虑异步 checkpoint；异步写可与计算重叠，实际占用会显著降低）
 ```
 
 **决策树：**
@@ -127,15 +131,17 @@ NFS 可以继续用？
 ├─ 有 HPC 运维团队 → Lustre（免费，运维成本高）
 ├─ 预算充足，追求极致 → WEKA（省心，配合 GDS 性能最高）
 ├─ 32 节点以下 → BeeGFS（轻量，易部署）
-└─ 临时/实验任务 → BeeOND（跑在 GPU 节点本地盘，零额外成本）
+└─ 临时/实验任务 → BeeOND（跑在 GPU 节点本地盘；无新增硬件采购成本，但会占用本地盘、压缩训练可用 scratch 空间，且非持久化，任务结束即失）
 ```
 
 ### 🔧 自己动手验：你的 NFS 到底有多慢？
 
 ```bash
-# 1. 测 NFS 单机读吞吐（最基础的测试）
-time dd if=/shared/dataset/shard-00001.bin of=/dev/null bs=1M count=10000
+# 1. 测 NFS 单机读吞吐（用 fio 多 job、多队列深度，避免单线程 dd 误判）
+fio --name=read --rw=read --bs=1M --direct=1 --numjobs=8 --iodepth=32 \
+    --filename=/shared/dataset/shard-00001.bin --runtime=30 --time_based --group_reporting
 # 期望：> 1 GB/s。如果 < 500 MB/s → NFS 严重瓶颈
+# 注：单线程 dd 通常封顶 1-3 GB/s，瓶颈在 syscall/单队列而非设备，只能粗测 <1 GB/s 量级
 
 # 2. 测 NFS 元数据性能
 time ls -l /shared/dataset/ | wc -l
@@ -144,7 +150,8 @@ time ls -l /shared/dataset/ | wc -l
 # 3. 测多客户端并发读写（模拟训练场景）
 # 在 4 个节点上同时读取
 for node in node1 node2 node3 node4; do
-  ssh $node "time dd if=/shared/data/shard-\$(hostname).bin of=/dev/null bs=1M count=5000" &
+  ssh $node "fio --name=read --rw=read --bs=1M --direct=1 --numjobs=8 --iodepth=32 \
+    --filename=/shared/data/shard-\$(hostname).bin --runtime=30 --time_based --group_reporting" &
 done
 wait
 # 期望：总吞吐 = 单节点 × 节点数 × 0.9
@@ -163,10 +170,10 @@ load_time = time.time() - t0
 ### ⚠️ 常见误区
 
 - **误区**："我买了全闪存 NAS，SSD 那么快，NFS 肯定不会慢"
-  - **实际**：**瓶颈在 NFS 协议的单点架构，不是磁盘本身**。一块 NVMe SSD 可以跑到 7 GB/s，但经过 NFS 服务器转发后，多客户端共享的带宽上限通常只有 1-2 GB/s（取决于网卡和协议开销）。你花大价钱买的 SSD 在 NFS 下只能发挥 1/5 的性能。
+  - **实际**：**瓶颈在 NFS 协议的单点架构，不是磁盘本身**。一块 PCIe 4.0 NVMe SSD 可以跑到约 7 GB/s，PCIe 5.0 企业级盘已达 14-14.8 GB/s，但经过 NFS 服务器转发后，多客户端共享的带宽上限通常只有 1-2 GB/s（取决于网卡和协议开销）。你花大价钱买的 SSD 在 NFS 下往往只能发挥 1/5-1/10 的性能。
 
 - **误区**："数据集只有几百 GB，NFS 足够用了"
-  - **实际**：几百 GB 是数据集大小，但训练过程中**每 30-45 分钟要写一次 420 GB 的 Checkpoint**。一天下来就是 13 TB 的写入流量。NFS 的 1 GB/s 写入速度意味着每次 Checkpoint GPU 要闲置 7 分钟。**存储系统不仅要喂数据集，还要接 Checkpoint 的写入。**
+  - **实际**：几百 GB 是数据集大小，但训练过程中**每 30-45 分钟要写一次 1.12 TB 的完整 Checkpoint**。按 45 分钟一次、每天 32 次算，一天下来就是 36 TB 的写入流量。NFS 的 1 GB/s 写入速度意味着每次 Checkpoint GPU 要闲置约 19 分钟。**存储系统不仅要喂数据集，还要接 Checkpoint 的写入。**
 
 - **误区**："并行文件系统太复杂了，小团队搞不定"
   - **实际**：WEKA 和 BeeGFS 的部署已经非常简化。WEKA 可以用 Docker 容器部署，BeeGFS 在 8-16 节点规模下 2 小时内能搭好。Lustre 确实复杂（需要独立 MDS/OSS 配置、条带化设置），但**你也未必需要 Lustre**。32 节点以下 BeeGFS/BeeOND 是很好的选择，**不需要 HPC 运维经验**。
@@ -175,10 +182,10 @@ load_time = time.time() - t0
 
 | 指标 | NFS（10GbE） | NFS（25GbE + NVMe） | Lustre（32 OST） | WEKA（32 节点） |
 |------|------------|-------------------|-----------------|----------------|
-| 单客户端读吞吐 | ~1 GB/s | ~2.5 GB/s | ~3-5 GB/s | ~5-10 GB/s |
-| 聚合读吞吐（8 节点） | ~1 GB/s（单点） | ~2.5 GB/s（单点） | **~208 GB/s** | **~272 GB/s** |
+| 单客户端读吞吐 | ~1 GB/s | ~2.5 GB/s | ~5-7 GB/s | ~7-9 GB/s |
+| 聚合读吞吐（8 节点） | ~1 GB/s（单点） | ~2.5 GB/s（单点） | **~52 GB/s** | **~68 GB/s** |
 | 元数据 10 万文件 ls | > 30 秒 | > 30 秒 | ~3 秒（独立 MDS） | **< 1 秒（分布）** |
-| Checkpoint 420 GB 写入 | 420 秒（7 分钟） | 168 秒 | **~11 秒** | **~9.5 秒** |
+| Checkpoint 1.12 TB 写入 | 1120 秒（19 分钟） | 448 秒（7.5 分钟） | **~30 秒** | **~26 秒** |
 | GPU 利用率损失 | 21-31% | 15-20% | 1-2% | **< 1%** |
 | 部署难度 | 极低 | 低 | **高（需 HPC 经验）** | 中（容器化） |
 | 月成本（32 GPU 集群） | ~$0（已有） | ~$0-100 | ~$5,000（运维人力） | ~$1,440 |
@@ -198,7 +205,8 @@ load_time = time.time() - t0
 ---
 
 > **参考资料**：
-> - [OpenSFS: Lustre 维基百科](https://wiki.opensfs.org/)
-> - [WEKA: "High-Performance Storage Complete Guide 2025"](https://www.weka.io/)
-> - [IBM Spectrum Scale 官方文档](https://www.ibm.com/products/spectrum-scale)
+> - [Lustre Wiki](https://wiki.lustre.org/)
+> - [WEKA 官方文档](https://docs.weka.io/)
+> - [IBM Storage Scale 官方文档](https://www.ibm.com/products/storage-scale)
 > - [BeeGFS 官网](https://www.beegfs.io/)
+> - [NFS/RDMA 实测（Sandia National Laboratories）](https://www.osti.gov/servlets/purl/1724581)

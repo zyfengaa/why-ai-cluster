@@ -88,19 +88,28 @@ Nsight Systems 时间线：
 ```python
 # 最简单的 Profiling——PyTorch Profiler
 import torch
-from torch.profiler import profile, record_function, ProfilerActivity
+from torch.profiler import profile, record_function, ProfilerActivity, schedule
 
-# 在训练循环中包裹
+# PyTorch Profiler 的底层是 Kineto：它同时挂钩 CPU、CUDA runtime（含 cuDNN/NCCL）
+# 与 GPU 计数器，所以能在一张表里同时看到 CPU 时间、设备(GPU)时间与 NCCL 通信。
+#
+# 注意：不要用 with profile(...) 直接包住 100 个 step——训练早期的
+# warmup、显存分配、kernel 编译都会严重失真。生产环境用 schedule(wait/warmup/active/repeat)，
+# 只采"已经稳定"的那几个 step。
+sched = schedule(wait=5, warmup=3, active=5, repeat=2)
+
 with profile(
     activities=[
         ProfilerActivity.CPU,
         ProfilerActivity.CUDA,
     ],
+    schedule=sched,
+    on_trace_ready=torch.profiler.tensorboard_trace_handler("./log/prof"),  # 导出 timeline 供 TensorBoard 查看
     record_shapes=True,      # 记录 tensor shape
     with_stack=True,          # 记录 Python 调用栈
     profile_memory=True,      # 记录内存分配
 ) as prof:
-    for step in range(100):
+    for step in range(40):
         with record_function("step_forward"):
             outputs = model(inputs)
         with record_function("step_backward"):
@@ -108,23 +117,29 @@ with profile(
         with record_function("step_optimizer"):
             optimizer.step()
             optimizer.zero_grad()
+        prof.step()               # 每步推进一次 schedule
 
-# 输出最重要的统计
+# 1) 表格：快速看谁最耗时
 print(prof.key_averages().table(
-    sort_by="cuda_time_total",  # 按 CUDA 时间排序
-    row_limit=20                 # 只看 Top-20
+    sort_by="device_time_total",  # 按设备(GPU)时间排序（PyTorch 2.0 起；原 cuda_time_total 已废弃）
+    row_limit=20                  # 只看 Top-20
 ))
+
+# 2) 时间线：真正的"X 光片"——用 TensorBoard 打开 ./log/prof
+#    tensorboard --logdir ./log/prof
+#    也可以导出 chrome://tracing 能打开的 JSON：
+prof.export_chrome_trace("trace.json")
 
 # 输出：
 # ----------------------  -----------  -----------  -----------
-# Name                  CPU total    CUDA total    Calls
+# Name                  CPU total    Device total  Calls
 # ----------------------  -----------  -----------  -----------
 # aten::matmul          12.4s         45.2s         1280
 # flash_attention       8.2s          28.1s         256
 # nccl:all_reduce       2.1s          15.3s         64
 # ...                   
 # ----------------------  -----------  -----------  -----------
-# 结论：matmul 占了最多 CUDA 时间 → 可能计算密集型的层是瓶颈
+# 结论：matmul 占了最多设备时间 → 可能计算密集型的层是瓶颈
 #       all_reduce 占 15% → 通信开销中等
 ```
 
@@ -162,22 +177,43 @@ torch.cuda.cudart().cudaProfilerStop()
 nsys stats my_profile.nsys-rep
 ```
 
+### NVTX 埋点：让时间线"看得懂"
+
+上面时间线里的 `[AllReduce]`、`step_forward` 这类彩色区块，本质是 **NVTX 区间**。两种常见写法：
+
+```python
+# 1) PyTorch 内置的 record_function（就是上面示例里的用法，等价于一次 NVTX range）
+with record_function("step_forward"):
+    ...
+
+# 2) 手动 NVTX（可包裹任意代码，包括自写的通信 / 数据加载逻辑）
+import torch
+torch.cuda.nvtx.range_push("AllReduce")
+dist.all_reduce(grad)
+torch.cuda.nvtx.range_pop()
+```
+
+配合 `nsys profile -t cuda,nvtx,nccl` 采集后，这些区间会直接变成时间线上的命名区块——这才把"能看"变成了"看得懂 NCCL 到底卡在哪一步"。
+
 ### Nsight Compute 使用示例
 
 ```bash
-# 1. 分析单个 CUDA kernel
-ncu --kernel-name regex_for_kernel python train.py
+# 1. 分析单个 CUDA kernel（正则匹配要加 regex: 前缀，否则会被当成字面 kernel 名）
+ncu --kernel-name regex:matmul python train.py
 
-# 2. 分析 kernel 的 FLOPs 利用率
-ncu --set full --import-source yes -o my_kernel_report python \
+# 2. 采集 kernel 的完整指标
+#    注意：--import-source 在新版 Nsight Compute 中已弃用/移除（被 --source-folders 系列取代），
+#    而且对 python -c 这种一次性程序抓源码也没有意义，这里只用 --set full -o
+ncu --set full -o my_kernel_report python \
   -c "import torch; \
       x=torch.randn(4096,4096,device='cuda'); \
       w=torch.randn(4096,4096,device='cuda'); \
       for _ in range(100): torch.mm(x,w); torch.cuda.synchronize()"
 
-# 3. 检查 kernel 的瓶颈类型
-# Compute bound vs Memory bound vs Latency bound
-ncu --query-metrics python train.py 2>&1 | grep -E "Memory|Compute|Latency"
+# 3. 判断 kernel 是 compute / memory / latency bound
+#    正确做法：用 --set full 采集后，看报告里的 "Speed of Light" / Roofline 小节。
+#    注意 --query-metrics 只是"列出可用指标名后退出"的子命令，它不会分析 kernel，
+#    也不会输出瓶颈分类——拿它 grep "Memory|Compute|Latency" 必然是空的。
 ```
 
 ### ⚠️ 常见误区
@@ -186,10 +222,10 @@ ncu --query-metrics python train.py 2>&1 | grep -E "Memory|Compute|Latency"
   - **实际**：**Profiling 是性能优化的前提**。没有数据就没有方向。很多团队凭感觉优化，改了一堆东西吞吐没变——Profiling 一次就发现瓶颈在 NCCL 上，半小时搞定。
 
 - **误区**："Nsight Systems 开销太大，不能在训练中开"
-  - **实际**：Nsight Systems 在采样模式下的开销 **< 3%**。可以长时间运行。精确跟踪模式开销大（~10-15%），但只适合短时间（几百个 step）分析。
+  - **实际**：nsys 对 CUDA 的采集本质是**跟踪（tracing）**，并不存在官方的"采样/跟踪"二分法。默认配置开销不高，但**开销与 trace 的事件量和 buffer 大小有关**——长时间开启会让 buffer 膨胀、主机侧开销上升。正确做法是用 `--duration` / `--capture-range` 限定采集窗口，只在需要的区间抓。
 
 - **误区**："PyTorch Profiler 和 Nsight Systems 是替代关系"
-  - **实际**：**它们是互补的。** PyTorch Profiler 给你框架层面的快照，Nsight Systems 给你系统级的时间线。先用 PyTorch Profiler 快速排查，再用 Nsight Systems 深入分析。
+  - **实际**：**它们是互补的。** PyTorch Profiler 给你框架层面的快照，Nsight Systems 给你系统级的时间线。先跑 Nsight Systems 找到瓶颈在哪一层（计算/通信/数据），再针对性深入，最后用 PyTorch Profiler 验证优化效果。
 
 ### 📊 底线数字速查
 
@@ -197,10 +233,9 @@ ncu --query-metrics python train.py 2>&1 | grep -E "Memory|Compute|Latency"
 
 | 工具 | 用途 | 开销 | 推荐时长 |
 |------|------|------|---------|
-| PyTorch Profiler | 快速排查 | < 5% | 50-200 step |
-| Nsight Systems（采样）| 宏观瓶颈定位 | < 3% | 500-5000 step |
-| Nsight Systems（跟踪）| 微观时间线 | 10-15% | 50-500 step |
-| Nsight Compute | 内核级优化 | 高 | 单个 kernel |
+| PyTorch Profiler | 快速排查 | 与 trace 事件量有关 | 用 schedule，采 50-200 step |
+| Nsight Systems | 宏观瓶颈定位 | 与 trace 事件量、buffer 有关 | 用 `--capture-range` 限流 |
+| Nsight Compute | 内核级优化 | 高（逐 kernel 重放）| 单个 / 少量 kernel |
 
 ### 💡 一句话记住
 
@@ -210,7 +245,7 @@ ncu --query-metrics python train.py 2>&1 | grep -E "Memory|Compute|Latency"
 
 ## 对后续的铺垫
 
-到这你已经掌握了 AI 集群从芯片到网络的全部基础知识。
+到这你已经把 AI 集群"跑起来之后"的运维观测主线走了一遍——监控、利用率、NCCL 调优、慢节点、Checkpoint 恢复与 Profiling。
 
 最后一章，我们看看最前沿的实践：
 
@@ -224,7 +259,7 @@ ncu --query-metrics python train.py 2>&1 | grep -E "Memory|Compute|Latency"
 ---
 
 > **参考资料**：
-> - [NVIDIA Nsight Systems 用户指南](https://developer.nvidia.com/nsight-systems) (2026)
-> - [NVIDIA Nsight Compute 用户指南](https://developer.nvidia.com/nsight-compute) (2026)
-> - [PyTorch Profiler 文档](https://pytorch.org/tutorials/recipes/recipes/profiler_recipe.html) (2026)
-> - [Profiling and Optimization for LLM Training](https://developer.nvidia.com/blog/tag/training-ai-models/) — NVIDIA Developer Blog (2026)
+> - [Nsight Systems 用户指南](https://docs.nvidia.com/nsight-systems/UserGuide/index.html) (NVIDIA, 2026)
+> - [Nsight Compute CLI 文档](https://docs.nvidia.com/nsight-compute/NsightComputeCli/index.html) (NVIDIA, 2026)
+> - [PyTorch Profiler（torch.profiler）文档](https://docs.pytorch.org/docs/stable/profiler.html) (PyTorch, 2026)
+> - [PyTorch Profiler 教程](https://pytorch.org/tutorials/recipes/recipes/profiler_recipe.html) (2026)

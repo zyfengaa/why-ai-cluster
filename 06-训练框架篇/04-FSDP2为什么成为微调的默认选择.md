@@ -17,7 +17,7 @@ FSDP2（Fully Sharded Data Parallelism 2）是 PyTorch 从 2.5 版本开始主�
 | **核心机制** | 基于 `FlatParameter`（把参数展平成 1D tensor 再分片） | **基于 DTensor**（保持原始形状，逻辑更清晰） |
 | **API 风格** | 类封装 `FSDP(model)` | 函数式 `fully_shard(model)` |
 | **torch.compile 兼容** | 不兼容 | ✅ **原生兼容** |
-| **显存管理** | 显存约节省 7% vs FSDP1 | ✅ **更优** |
+| **显存管理** | 基准 | ✅ FSDP2 相比 FSDP1 约省 7% 显存 |
 | **TP 组合** | 困难 | ✅ **DTensor 原生支持 TP** |
 | **弹性 Checkpoint** | 不支持 | ✅ DCP 原生支持 |
 
@@ -44,20 +44,23 @@ DTensor 让分片操作变得**透明**——你操作 DTensor 就像操作普�
 
 ### 为什么它成了默认选择
 
-1. **PyTorch 官方主推**：FSDP1 在 PyTorch 2.11 起已废弃，新项目全部用 FSDP2
+1. **PyTorch 官方主推**：FSDP1 已进入 deprecated 状态（旧的 `fully_shard` 实验前端在 2.4 打弃用警告、2.5 后移除），新项目全部用 FSDP2；生态侧 HF Transformers 已把 FSDP2 设为默认（PR #45640），Axolotl 已彻底移除 FSDP1
 2. **生态集成最广**：HuggingFace Transformers、Lightning、Axolotl、TorchTitan 默认使用 FSDP2
 3. **zero code intrusion**：`fully_shard()` 包装一下就完成分布式改造
-4. **torch.compile 兼容**：在 H100 上 + float8 可以提升 50% 吞吐
+4. **torch.compile 兼容**：在 H100 上叠加 `torch.compile` + FP8 可累计提升约 38% 吞吐（TorchTitan 实测，8B 模型）
 
 ### 实际性能数据
 
-| 模型 | GPU 数 | FSDP2 + BF16 | FSDP2 + float8 | DeepSpeed ZeRO-3 |
-|------|--------|-------------|----------------|-----------------|
-| Llama 7B | 8×H100 | 35-45% MFU | ~50% MFU | 30-40% MFU |
-| Llama 70B | 64×H100 | 40-48% MFU | ~55% MFU | 38-45% MFU |
-| Llama 405B | 512×H100 | 38-45% MFU（+ TP8 + compile）| — | 35-42% MFU |
+下表来自 TorchTitan 在 H100 上对 Llama 3 8B 的实测（来源见文末参考资料的 torchtitan float8 文档）：
 
-**关键发现**：FSDP2 在中小模型上的性能已经反超 DeepSpeed ZeRO-3。在大模型上两者接近，但 FSDP2 的 API 更简洁。
+| 配置（Llama 3 8B, H100） | 相对 baseline 吞吐 | 备注 |
+|------|-------------------|------|
+| FSDP2 + BF16（baseline） | 1× | 8B 约 48% MFU |
+| + `torch.compile` | +10.7% | |
+| + FP8 linear（float8 GEMM） | +33% | |
+| + FP8 all-gather | 累计 +38% | 三项叠加 |
+
+**关键发现**：这些收益是可叠加的——`torch.compile`（+10.7%）、`FP8 linear`（+33%），再叠上 `FP8 all-gather` 累计 +38%，8B 模型可达约 48% MFU。FSDP2 的优势主要来自 API 简洁 + 与 compile/float8 的无缝组合，而不是单个"魔法开关"。
 
 ---
 
@@ -78,19 +81,21 @@ DTensor 让分片操作变得**透明**——你操作 DTensor 就像操作普�
 ### 📋 决策指南：FSDP2 适合你的场景吗？
 
 ```python
-from torch.distributed.fsdp import ShardingStrategy
-
-# FSDP2 四种分片策略
-strategy = "FULL_SHARD"     # ZeRO-3 等价：参数+梯度+优化器状态全分片
-# strategy = "SHARD_GRAD_OP"  # ZeRO-2 等价：只分片梯度+优化器状态
-# strategy = "NO_SHARD"       # DDP 等价：不分片
-# strategy = "HYBRID_SHARD"   # HSDP：节点内 FULL_SHARD + 节点间 NO_SHARD
+# FSDP2 不再使用 FSDP1 的 ShardingStrategy 枚举，
+# 而是用 reshard_after_forward 布尔值 + device mesh 来表达策略。
+# FSDP1 → FSDP2 等价映射：
+#   FULL_SHARD          → reshard_after_forward=True
+#   SHARD_GRAD_OP       → reshard_after_forward=False
+#   HYBRID_SHARD        → reshard_after_forward=True  + 2D device mesh
+#   _HYBRID_SHARD_ZERO2 → reshard_after_forward=False + 2D device mesh
+#   NO_SHARD            → 不调用 fully_shard（等价 DDP）
+reshard_after_forward = True
 
 # 推荐选择：
-# < 7B, 显存充裕 → NO_SHARD（DDP）
-# 7B-13B, 显存略紧张 → SHARD_GRAD_OP
-# 13B-70B → FULL_SHARD
-# 多节点，跨机通信慢 → HYBRID_SHARD
+# < 7B, 显存充裕 → 不调用 fully_shard（等价 NO_SHARD / DDP）
+# 7B-13B, 显存略紧张 → reshard_after_forward=False（等价 SHARD_GRAD_OP）
+# 13B-70B → reshard_after_forward=True（等价 FULL_SHARD）
+# 多节点，跨机通信慢 → 2D mesh（replicate × shard）+ reshard_after_forward=True（等价 HYBRID_SHARD）
 ```
 
 ```bash
@@ -100,15 +105,24 @@ torchrun --nproc_per_node=8 train.py
 
 ```python
 # train.py 核心代码
+import os
 import torch
+import torch.distributed as dist
+from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.fsdp import fully_shard
-from torch.distributed.pipelining import PipelineStage  # 可选
+
+# 0. 初始化进程组与 device mesh（FSDP2 必须）
+dist.init_process_group("nccl")
+torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
+mesh = init_device_mesh("cuda", (dist.get_world_size(),))
 
 model = LlamaForCausalLM.from_pretrained("meta-llama/Llama-3-70b")
 
-# 就这一行！
+# 1. 自底向上分片：每个 layer 一个 FSDP 组
 for layer in model.model.layers:
-    fully_shard(layer)
+    fully_shard(layer, mesh=mesh)
+# 2. 最后对根模型再调一次（FSDP2 官方要求自底向上）
+fully_shard(model, mesh=mesh)
 
 # 享受分布式训练
 optimizer = torch.optim.AdamW(model.parameters(), lr=3e-5)
@@ -124,7 +138,10 @@ for batch in dataloader:
   - **实际**：功能等价（都做参数分片），但实现不同。FSDP2 基于 DTensor，与 PyTorch 生态集成更好。DeepSpeed 支持更丰富的功能（Ulysses、MoE、NVMe Offload）。**两者不是替代关系，是不同权衡。**
 
 - **误区**："FSDP2 只支持数据并行"
-  - **实际**：FSDP2 + DTensor 支持 TP。在 PyTorch 2.5+ 中，`fully_shard()` 可以和 `tensor_parallel()` 注解组合使用。Meta 的 TorchTitan 参考实现展示了 FSDP2 + TP + PP + float8 的 4D 并行。
+  - **实际**：FSDP2 + DTensor 支持 TP。在 PyTorch 2.5+ 中，`fully_shard()` 可以和 `tensor_parallel()` 注解组合使用。Meta 的 TorchTitan 参考实现展示了 FSDP2 + TP + float8 的组合。
+
+- **⚠️ 什么情况下 `torch.compile` 反而更慢**
+  - **实际**：`torch.compile` 与 FSDP2 组合存在 graph break 与 grid 限制；已知把 `nn.Linear` 单独 compile 再叠加 selective activation checkpoint 时，会因反复重编译导致 TFLOPS 从 386 掉到 126（torchtitan issue #786）。**不是所有配置下 compile 都会变快**——上线的组合要先做端到端 profiling。
 
 ### 💡 一句话记住
 
@@ -143,7 +160,9 @@ FSDP2 适合微调和小规模训练。DeepSpeed 适合内存受限场景。Mega
 ---
 
 > **参考资料**：
-> - [FSDP2 技术说明 (PyTorch 2.5+)](https://pytorch.org/docs/stable/fsdp.html)
-> - [TorchTitan: Meta 的 FSDP2+TP+float8 参考实现](https://github.com/pytorch/torchtitan)
-> - ["FSDP2 for 100B+ Models: Multi-Node Deep Dive" (techbytes, 2026)](https://techbytes.com/)
-> - [Spheron: "Distributed LLM Training on GPU Cloud: FSDP vs DeepSpeed vs Megatron" (2026)](https://www.spheron.network/blog/)
+> - [FSDP2 API：`fully_shard`（PyTorch 官方文档）](https://docs.pytorch.org/docs/stable/distributed.fsdp.fully_shard.html)
+> - [FSDP 教程（PyTorch 官方）](https://docs.pytorch.org/tutorials/intermediate/FSDP_tutorial.html)
+> - [TorchTitan：Meta 的 FSDP2 + TP + float8 参考实现](https://github.com/pytorch/torchtitan)
+> - [TorchTitan float8 文档（本文性能数据来源）](https://github.com/pytorch/torchtitan/blob/main/docs/float8.md)
+> - [HuggingFace Transformers PR #45640：FSDP2 设为默认](https://github.com/huggingface/transformers/pull/45640)
+> - [Axolotl 多卡训练文档（已移除 FSDP1）](https://docs.axolotl.ai/docs/multi-gpu.html)
