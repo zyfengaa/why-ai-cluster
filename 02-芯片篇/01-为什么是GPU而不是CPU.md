@@ -42,7 +42,7 @@ GPU 核心结构（简化）：
 └──────────────────────────────┘
 ```
 
-- **大量 ALU**：一个 GPU 有数千个计算核心（H100 有 18,432 个 CUDA Cores）
+- **大量 ALU**：一个 GPU 有数千个计算核心（H100 SXM 有 16,896 个 CUDA Cores，PCIe 版为 14,592 个）
 - **简单控制单元**：不做复杂的指令调度，一次给所有 ALU 发相同指令
 - **小缓存**：靠高并行度隐藏访存延迟
 
@@ -52,11 +52,13 @@ GPU 核心结构（简化）：
 
 ## 具体数字对比
 
-| 任务类型 | CPU（单核） | CPU（全核） | GPU（全核） | 加速比 |
+| 任务类型 | CPU（单核） | CPU（全核） | GPU（全核） | 结论 |
 |---------|-----------|-----------|-----------|--------|
-| 10² × 10³ 矩阵乘法 | 0.5 ms | 8 ms（16核） | 0.02 ms | **400×** |
-| 标量加法 | 0.3 ns | 0.3 ns | 5 ns | 慢16× |
+| 大矩阵乘法（GEMM） | 基线 | 多核可摊平 | 快一到几个数量级 | GPU 胜 |
+| 标量加法 | 快 | 快 | 有 kernel 启动开销（μs 级） | CPU 胜 |
 | 分支预测密集代码 | 快 | 快 | 慢 | CPU 胜 |
+
+> 注意：上表只给方向性结论。具体的加速倍数**没有统一数字**——它取决于矩阵规模、精度、库实现和硬件代际。想拿到你环境里的真实倍数，用下方脚本实测，不要相信"快 N 倍"的笼统说法。
 
 AI 训练的工作负载就是 **大量矩阵运算** + **少量标量操作** + **几乎没有分支**。完全是 GPU 的主场。
 
@@ -69,7 +71,7 @@ AI 训练的工作负载就是 **大量矩阵运算** + **少量标量操作** +
 | 单线程性能 | ✅ 极强 | ❌ 弱 |
 | 并行计算 | ❌ 弱（几十核） | ✅ 极强（数千核） |
 | 灵活性 | ✅ 什么都能做 | ❌ 适合特定模式 |
-| 功耗效率（FLOPS/W） | ❌ 低 | ✅ 高 5-10 倍 |
+| 功耗效率（FLOPS/W） | ❌ 矩阵负载下低 | ✅ 矩阵负载下显著更高（倍数随负载/代际变化，无统一值） |
 | 编程难度 | ✅ 标准化 | ⚠️ 需要 CUDA/OpenCL |
 
 ---
@@ -80,13 +82,13 @@ AI 训练的工作负载就是 **大量矩阵运算** + **少量标量操作** +
 
 | 工作负载类型 | 用 CPU | 用 GPU | 为什么 |
 |------------|--------|--------|-------|
-| 大模型训练（7B+） | ❌ | ✅ | 纯矩阵运算，GPU 快 100-400× |
+| 大模型训练（7B+） | ❌ | ✅ | 纯矩阵运算，GPU 占绝对优势（倍数实测为准） |
 | 小模型推理（<1B） | ⚠️ 可用 | ✅ 更优 | CPU 延迟低但吞吐不足 |
 | 数据预处理 | ✅ | ❌ | 逻辑判断多，GPU 不擅长 |
 | 模型 serving 路由 | ✅ | ❌ | 少量请求，延迟敏感 |
 | 批处理推理（高吞吐） | ❌ | ✅ | GPU 并行优势明显 |
-| HPC 科学计算（FP64） | ⚠️ 视场景 | ⚠️ 视场景 | AMD MI300X FP64 强，NVIDIA 弱 |
-| 训练 405B Llama 3 | ❌ | ✅ 必须 GPU | 单卡 ~810 GB 显存需求 |
+| HPC 科学计算（FP64） | ⚠️ 视场景 | ⚠️ 视场景 | AMD MI300X FP64 强，NVIDIA 相对弱 |
+| 训练 405B Llama 3 | ❌ | ✅ 必须 GPU | 仅 BF16 权重就约 810 GB 显存 |
 
 **一条经验：如果你的代码里 `for` 循环多、分支多、逻辑判断多 → 用 CPU。如果你的代码里矩阵乘法多 → 用 GPU。**
 
@@ -119,7 +121,7 @@ if torch.cuda.is_available():
     gpu_time = time.time() - t0
     print(f"GPU 矩阵乘法: {gpu_time*1000:.1f} ms")
     print(f"GPU 加速比: {cpu_time/gpu_time:.0f}×")
-    
+
     # 还可以测更大的矩阵
     size2 = 20000
     A2 = torch.randn(size2, size2).cuda()
@@ -136,32 +138,33 @@ if torch.cuda.is_available():
 nvidia-smi --query-gpu=name,compute_cap,memory.total,temperature.gpu \
   --format=csv
 # 输出示例：NVIDIA H100, 9.0, 81259 MiB, 35
-# Compute Capability 8.0+ = 支持 FP8 训练
-# Compute Capability 7.0+ = 支持混合精度训练
+# Compute Capability 7.0+（Volta）= 支持混合精度训练（Tensor Core）
+# Compute Capability 8.0 = A100（Ampere），只到 BF16/TF32，不支持 FP8
+# Compute Capability 8.9（Ada）/ 9.0（Hopper）起 = 原生支持 FP8
 ```
 
 ### ⚠️ 常见误区
 
 - **误区**："GPU 核心多，所以什么都比 CPU 快"
-  - **实际**：GPU 的核心是简单 ALU，适合大规模并行计算。但**处理单个任务时，CPU 比 GPU 快得多**。比如你的程序只有一个 `if-else` 判断，CPU 可能 1 ns 完成，GPU 需要 5-10 μs（慢 5,000-10,000 倍）。**GPU 的强项不是快，而是多——不是跑得快，而是能同时跑很多。**
+  - **实际**：GPU 的核心是简单 ALU，适合大规模并行计算。但**处理单个任务时，CPU 快得多**——GPU 上哪怕一次小计算也有微秒级的 kernel 启动开销，CPU 只要纳秒级。**GPU 的强项不是快，而是多——不是跑得快，而是能同时跑很多。**
 
 - **误区**："买 GPU 就是买算力，TFLOPS 越高越好"
-  - **实际**：TFLOPS 是峰值算力，实际能用到多少取决于**内存带宽**和**数据流水线**。H100 的理论 FP16 算力 2000 TFLOPS，但实际训练 LLM 时 MFU（模型算力利用率）通常在 30-50%。瓶颈往往在**显存带宽**（H100 3.35 TB/s）而不是算力本身。这就是为什么 HBM 带宽比算力更关键。
+  - **实际**：TFLOPS 是峰值算力（引用时务必区分稠密/稀疏——稀疏是稠密的 2 倍），实际能用到多少取决于**内存带宽**和**数据流水线**。H100 的稠密 FP16 峰值约 989 TFLOPS，但实际训练 LLM 时 MFU（模型算力利用率）通常在 30-50%。瓶颈往往在**显存带宽**（H100 3.35 TB/s）而不是算力本身。这就是为什么 HBM 带宽比算力更关键。
 
-- **误区**："AMD MI300X 的 FP16 TFLOPS 比 H100 高 32%，所以训练更快"
-  - **实际**：2025-2026 年实测数据：MI300X 在实际 AI 训练中只能达到峰值的约 45%，而 H100 能到 93%。8×GPU 场景下 H100 的吞吐比 MI300X 高 46%。**硬件峰值只是纸面数字，软件生态和实际工程实现才是决定因素。**
+- **误区**："AMD MI300X 的 FP16 峰值算力比 H100 高，所以训练更快"
+  - **实际**：微基准测试可以接近或超过 H100，但**端到端训练性能不等于微基准**——取决于模型、框架、算子覆盖和互联。MI300X 与 H100 的真实训练差距通常在 20-40% 量级（不同模型/框架差异很大），主要差在 ROCm 软件栈和集群互联。**硬件峰值只是纸面数字，软件生态和工程实现同样重要。**
 
 ### 📊 底线数字速查
 
-| 指标 | CPU（Intel Xeon 第5代） | GPU（H100 SXM） | GPU（B200） |
+| 指标 | CPU（第5代 Intel Xeon 典型值） | GPU（H100 SXM） | GPU（B200） |
 |------|----------------------|----------------|------------|
-| 典型核心数 | 32-64 核 | 18,432 CUDA 核心 | 未公开 |
-| FP16 算力 | ~5 TFLOPS（AVX） | **~2,000 TFLOPS** | **~9,000 TFLOPS** |
-| FP64 算力 | ~2.5 TFLOPS | 34 TFLOPS | 低（Blackwell 不侧重 FP64）|
-| 内存带宽 | ~0.5 TB/s（DDR5） | **3.35 TB/s（HBM3）** | **8 TB/s（HBM3e）** |
-| 矩阵乘法加速比（vs 单 CPU 核） | 1× | **~400×** | **~1,000+×** |
-| 功耗 | 350W（CPU 本身） | 700W | 1,000W |
-| 适合场景 | 逻辑控制、数据预处理 | **大规模矩阵运算** | **大规模训练 + FP4 推理** |
+| 典型核心数 | 32-64 核 | 16,896 CUDA 核心（PCIe 版 14,592） | 未公开（以 Tensor Core 为准） |
+| FP16/BF16 算力 | ~5 TFLOPS（AVX，理论值） | **989 TFLOPS 稠密**（稀疏 1,979） | **2.25 PFLOPS 稠密**（稀疏 4.5） |
+| FP8 / FP4 | — | FP8 稠密 1,979 TFLOPS（稀疏 3,958） | FP8 稠密 4.5 PFLOPS；FP4 稠密 9 PFLOPS（稀疏 18） |
+| FP64 算力 | ~2.5 TFLOPS | 34 TFLOPS | 低（Blackwell 不侧重 FP64） |
+| 内存带宽 | ~0.5 TB/s（DDR5，8 通道） | **3.35 TB/s（HBM3）** | **8 TB/s（HBM3e）** |
+| 功耗（TDP） | ~350 W（CPU 本身） | 700 W | ~1,000 W |
+| 适合场景 | 逻辑控制、数据预处理 | **大规模矩阵运算** | **大规模训练 + FP4/FP8 推理** |
 
 ### 💡 一句话记住
 
@@ -182,6 +185,7 @@ nvidia-smi --query-gpu=name,compute_cap,memory.total,temperature.gpu \
 ---
 
 > **参考资料**：
-> - [NVIDIA CUDA C++ Programming Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/)
-> - Hennessy & Patterson, "Computer Architecture: A Quantitative Approach" (第6版)
-> - [GPU 与 CPU 架构对比（NVIDIA Developer Blog）](https://developer.nvidia.com/blog/)
+> - [NVIDIA H100 官方规格页](https://www.nvidia.com/en-us/data-center/h100/) — CUDA Core 数、TFLOPS（稠密/稀疏）、HBM 带宽
+> - [NVIDIA Hopper 架构深度解析（NVIDIA Developer Blog）](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/)
+> - [NVIDIA CUDA C++ Programming Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/) — Compute Capability 与各代硬件特性对照
+> - [NVIDIA DGX B200 页面（Blackwell）](https://www.nvidia.com/en-us/data-center/dgx-b200/)

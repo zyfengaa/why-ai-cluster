@@ -15,27 +15,28 @@
 **MFU** 是目前业界公认衡量集群训练效率的核心指标（由 Google 在 PaLM 论文中首次明确提出）。定义：
 
 ```
-MFU = 实际观察到的 FLOPS / GPU 的理论峰值 FLOPS
+MFU = 实际达到的模型 FLOPs/s ÷ GPU 的稠密峰值 FLOPs/s
 ```
+
+**分母必须是稠密（dense）峰值**。H100 的 FP16/BF16 稠密峰值是 989 TFLOPS（稀疏 1,979）——MFU 永远拿实际算力除以 989，而不是除以稀疏值，否则等于白送一倍水分。不同精度峰值不同，报 MFU 时要注明精度口径。
 
 ### 别和 nvidia-smi 的 GPU-Util 搞混了
 
 | 指标 | `nvidia-smi GPU-Util` | MFU |
 |------|----------------------|-----|
-| 含义 | GPU 有计算任务的时间比例 | GPU Tensor Core 实际跑出多少算力 |
+| 含义 | 采样期内**至少有一个 kernel 在执行**的时间比例 | GPU 稠密峰值的实际兑现比例 |
 | 说人话 | "我有没有在干活？" | "我干活的时候有多卖力？" |
-| 100% 代表什么 | GPU 一直没闲着 | GPU 跑满了理论峰值 |
+| 100% 代表什么 | 采样期内一直有 kernel 在跑，但可能是低效算子 | 跑满了理论稠密峰值 |
 | 能反映通信瓶颈吗？ | ❌ 不能 | ✅ 能（通信时 MFU 会下降） |
 
 ### 例子
 
-一个 GPU 1 秒内：前 0.8 秒全速计算（2000 TFLOPS），后 0.2 秒等待梯度同步。
+一个 GPU 1 秒内：前 0.8 秒全速计算（989 TFLOPS 稠密），后 0.2 秒等待梯度同步。
 
-- `nvidia-smi GPU-Util` = 80%（因为 80% 的时间算子在跑）
-- MFU = 80% × 100% = 80%（实际 FLOPS / 理论峰值）
-- 如果计算时只用了 50% 的 Tensor Core，那 MFU = 80% × 50% = 40%
+- `nvidia-smi GPU-Util` = 80%（因为 80% 的时间里至少有 kernel 在跑）
+- 如果计算时只跑出了 50% 的稠密峰值，MFU = 80% × 50% = 40%
 
-所以 `nvidia-smi` 100% ≠ MFU 100%。这也是为什么从业者常说："**不要只看 nvidia-smi，会骗人的。**"
+所以 `nvidia-smi` 100% ≠ MFU 100%。GPU-Util 只回答"忙不忙"，不回答"忙得有没有价值"。这也是为什么从业者常说："**不要只看 nvidia-smi，会骗人的。**"
 
 ---
 
@@ -54,6 +55,8 @@ MFU = 实际观察到的 FLOPS / GPU 的理论峰值 FLOPS
 
 ### 业界参考值
 
+全书的统一分档口径（跨文章一致）：
+
 | MFU 范围 | 评价 | 代表场景 |
 |----------|------|---------|
 | 10-20% | 差 | 裸数据并行，没有梯度累积 |
@@ -62,7 +65,7 @@ MFU = 实际观察到的 FLOPS / GPU 的理论峰值 FLOPS
 | 50-65% | 优秀 | Megatron-Core + 极致调优 |
 | 70%+ | 顶级 | 极少见，通常只有高度优化的 TP 组内能达到 |
 
-Meta 训练 Llama 3 405B 时的 MFU 大约 38%，经过多轮网络调优后提到 ~43%。
+公开可查的锚点：Meta 训练 Llama 3 405B 时的 MFU 为 **38-43%**（论文披露口径）——"良好"档。可见千卡以上的真实大训练，MFU 没有营销数字那么漂亮。
 
 ---
 
@@ -89,7 +92,7 @@ Meta 训练 Llama 3 405B 时的 MFU 大约 38%，经过多轮网络调优后提�
 | 单节点全量微调 13B | 35-45% | 检查数据加载是不是瓶颈（dataloader 停顿） |
 | 2-4 节点训练 70B（FSDP2） | 35-50% | 网络通信开销太大 → 检查 NCCL busbw |
 | 16+ 节点训练 70B+（Megatron） | 45-60% | 并行策略配置不合理（TP/PP/DP 没匹配好） |
-| 千卡级预训练 | 50-65%（顶级水平） | 参考 Meta Llama 3 的 43%，Google Gemini 的 57% |
+| 千卡级预训练 | 38-50% | 参考 Meta Llama 3 405B 公开值 38-43%；低于 30% 要查网络与并行配置 |
 
 **一条经验法则**：如果你的 MFU < 25%，大概率有"低级错误"——比如数据加载没做好、通信没走 RDMA、或者 Batch Size 设得太小。**先解决低级错误，再追求高级优化。**
 
@@ -102,22 +105,30 @@ import torch
 def compute_mfu(num_flops_per_step, step_time_seconds, num_gpus):
     """
     参数：
-      num_flops_per_step: 你模型每次迭代的理论 FLOPs
+      num_flops_per_step: 每步的模型 FLOPs ≈ 6 × 参数量 × 每步 token 数
                           可以从 Megatron / DeepSpeed 的 log 里拿
       step_time_seconds: 你训练日志里看到的 step time
       num_gpus: GPU 数量
     返回：MFU（百分比）
     """
-    gpu_peak_fp16_tflops = 2000  # H100 FP16 峰值
-    theoretical_peak = num_gpus * gpu_peak_fp16_tflops * 1e12
-    actual = num_flops_per_step / step_time_seconds
+    gpu_peak_dense_tflops = 989  # H100 FP16/BF16 稠密峰值（MFU 分母必须是稠密值）
+    theoretical_peak = num_gpus * gpu_peak_dense_tflops * 1e12
+    actual = num_flops_per_step / step_time_seconds  # 集群实际 FLOPs/s
     mfu = actual / theoretical_peak * 100
     return mfu
 
-# 举例：Llama 3 70B 训练，1,024 H100，step_time = 1.2s
-# num_flops_per_step ≈ 8 × (70 × 10^9) × 4096 × 6 ≈ 1.38e16
-# MFU ≈ 1.38e16 / 1.2 / (1024 × 2e15) = 56% ← 这是理想值，实际会更低
+# 举例：Llama 3 70B，1,024×H100，每步 1024 卡 × 4096 token
+# num_flops_per_step ≈ 6 × (70×10^9) × (1024 × 4096) ≈ 1.76e18
+# 实测 step_time = 4.3 s
+# 集群实际算力 = 1.76e18 / 4.3 ≈ 4.1e17 FLOPs/s
+# 理论峰值    = 1024 × 989e12 ≈ 1.01e15 FLOPs/s
+# MFU = 4.1e17 / 1.01e15 ≈ 40%
+#
+# 注意先做量纲检查：如果算出来的 MFU > 100%，说明你的 FLOPs 数或峰值口径错了
+# （比如误用了稀疏峰值，或者把乘了 2 倍的 FLOPs 又乘了一遍）
 ```
+
+（一个常见的翻车现场：拿 1.38e16 FLOPs 除以 1.2 s 再除以 1024 张卡 × 2e15——分子分母的口径全对不上，算出个 0.56% 还以为集群烂透了。先确认三件事：每步 FLOPs 是 6ND、step time 是实测的、峰值是稠密的。）
 
 **不用自己算的方法**：用 PyTorch Profiler 或 Nsight Systems：
 
@@ -132,7 +143,7 @@ nsys profile -o profile_output python train.py
 ### ⚠️ 常见误区
 
 - **误区**："nvidia-smi 显示 GPU-Util 100% = GPU 跑满了"
-  - **实际**：GPU-Util 代表的是"有计算任务在运行的时间比例"，不等于"Tensor Core 算力跑满"。一个 GPU 可能在跑低效的 FP32 算子，利用率 100% 但 MFU 只有 20%。**要真的看算力，用 DCGM 或 Nsight Systems 看 Tensor Core 占用率。**
+  - **实际**：GPU-Util 的含义是"采样期内至少有一个 kernel 在执行的时间比例"，不等于"算力跑满"。一个 GPU 可能在跑低效的 FP32 算子，利用率 100% 但 MFU 只有 20%。**要真的看算力，用 DCGM 或 Nsight Systems 看实际 FLOPs 与 Tensor Core 活动。**
 - **误区**："MFU 越高越好，应该追求 70%+"
   - **实际**：小模型（<7B）的 MFU 天然低——因为 GPU 算力过剩，很大一部分时间花在 kernel launch 开销和数据搬运上。**MFU 只有在同规模模型、同硬件之间对比才有意义。**
 - **误区**："调优一次，MFU 就稳定了"
@@ -142,12 +153,12 @@ nsys profile -o profile_output python train.py
 
 | MFU 范围 | 意味着什么 | 你应该做什么 |
 |---------|-----------|------------|
-| < 15% | **严重问题** | 检查：数据加载、通信协议（是否走了 TCP 回退）、单卡算子效率 |
-| 15-25% | 差 | 打开 AMP 混合精度 / BF16，检查是否存在不必要的 CPU-GPU 同步 |
-| 25-40% | 可接受 | 开始优化：梯度累积、通信重叠（overlap communication） |
-| 40-55% | 良好 | 微调并行策略，进一步压通信延迟 |
-| 55-70% | 优秀 | 恭喜，你的集群效率已经是业界前列 |
-| > 70% | 顶级 | 罕见，通常只在 TP 组内小范围达到 |
+| < 10% | **严重问题** | 检查：数据加载、通信是否真正走了 RDMA（IB/RoCE）而不是退化到 TCP/IP、单卡算子效率 |
+| 10-20% | 差 | 打开 AMP 混合精度 / BF16，检查是否存在不必要的 CPU-GPU 同步 |
+| 25-35% | 一般 | 开始优化：梯度累积、通信重叠（overlap communication） |
+| 40-50% | 良好 | 微调并行策略，进一步压通信延迟 |
+| 50-65% | 优秀 | 恭喜，你的集群效率已经是业界前列 |
+| > 70% | 顶级 | 罕见，通常只在 TP 组内小范围达到；先核对是不是算错了口径 |
 
 ### 💡 一句话记住
 
@@ -168,6 +179,8 @@ nsys profile -o profile_output python train.py
 ---
 
 > **参考资料**：
-> - [Chowdhery et al., "PaLM: Scaling Language Modeling with Pathways" (2022)](https://arxiv.org/abs/2204.02311) — 首次提出 MFU
-> - [Google DeepMind 对 MFU 的深入讨论 (2024)](https://deepmind.google/research/)
-> - [2026 年分布式训练深度分析报告 — 各框架 MFU 实测对比](https://www.semianalysis.com/)
+> - [Chowdhery et al., "PaLM: Scaling Language Modeling with Pathways" (2022)](https://arxiv.org/abs/2204.02311) — 首次明确提出 MFU 及其计算口径
+> - [Grattafiore et al., "The Llama 3 Herd of Models" (2024)](https://arxiv.org/abs/2407.21783) — Llama 3 405B 训练 MFU 38-43% 的公开披露
+> - [NVIDIA DCGM 用户指南](https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/index.html) — `DCGM_FI_PROF_SM_ACTIVE` 等利用率指标的正确定义
+> - [PyTorch Profiler 文档](https://pytorch.org/docs/stable/profiler.html) — 实测每步 FLOPs 与时间的方法
+> - [NVIDIA H100 Tensor Core GPU 规格页](https://www.nvidia.com/en-us/data-center/h100/) — 稠密/稀疏峰值的官方口径
