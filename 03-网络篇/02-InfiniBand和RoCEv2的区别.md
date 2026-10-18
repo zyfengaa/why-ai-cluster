@@ -2,7 +2,7 @@
 
 ## 为什么会有这个问题
 
-上篇讲到 RDMA（Remote Direct Memory Access，远程直接内存访问）是 AI 集群网络的基石。RDMA 允许一台机器直接读写另一台机器的内存（GPU 显存），完全绕过 CPU——这就避免了"CPU 做中转"的延迟。
+在对比 InfiniBand 和 RoCEv2 之前，先明确两者的共同前提：**它们都是 RDMA 网络**。RDMA（Remote Direct Memory Access，远程直接内存访问）允许一台机器直接读写另一台机器的内存，完全绕过 CPU——这就避免了"CPU 做中转"的复制开销和延迟。配合 GPUDirect RDMA 时，网卡还可以直接读写对端 GPU 显存，数据不必先落到主机内存。
 
 RDMA 有两种技术路线：
 
