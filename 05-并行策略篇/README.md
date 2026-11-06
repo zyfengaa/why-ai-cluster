@@ -7,15 +7,24 @@
 | [Q1: 数据并行（DP）是怎么工作的？](01-数据并行DP.md) | Ring All-Reduce：每卡通信量 ≈ 2S，与卡数基本无关；ZeRO-1/2/3 的分片与通信代价 |
 | [Q2: 显存放不下整个模型怎么办？](02-张量并行TP.md) | 张量并行（TP）— 层内切分；每层 4 次 All-Reduce，TP 绑死 NVLink 域内（≤ 8） |
 | [Q3: 层数太多怎么办？](03-流水线并行PP.md) | 流水线并行（PP）— 层间切分；气泡率 = (P−1)/(M+P−1)，ZB-H1 降到 1/3 |
-| [Q4: 这几种并行能组合吗？](04-3D并行.md) | 3D 并行：总卡数 = TP×PP×DP 的工程权衡 |
+| [Q4: 这几种并行能组合吗？](04-3D并行.md) | 3D 并行：稠密模型总卡数 = TP×PP×DP 的工程权衡 |
 | [Q5: 长序列训练为什么需要序列并行（SP）？](05-序列并行SP.md) | 逻辑 S² 矩阵 vs FlashAttention 物化激活；SP 切 LayerNorm/Dropout，切 attention 的是 CP |
-| [Q6: MoE 模型为什么需要专家并行（EP）？](06-专家并行EP.md) | 稀疏激活 + All-to-All 通信；EP 从 DP 组内组织，总卡数仍 = TP×PP×DP |
+| [Q6: MoE 模型为什么需要专家并行（EP）？](06-专家并行EP.md) | 稀疏激活 + All-to-All 通信；DP_attn = EP×DP_experts，DeepSeek-V3 的 TP=1 锚点 |
 | [Q7: 这些并行策略哪个最好？](07-并行策略选型决策树.md) | 16 B/参数账本 → TP → PP → DP 的选型顺序与决策树 |
+| [Q8: 同一个模型，预训练/微调/LoRA/蒸馏/RL 的并行为什么不同？](08-训练阶段与并行选择.md) | 三本账本（16 B / 2 B / 0.5 B）→ 阶段 × 并行的二维决策表 |
+| [Q9: 每种并行每步到底传多少数据？](09-并行通信量公式表.md) | DP/TP/PP/EP/CP 统一口径公式 + Llama 3 70B 代入值 + 步时间估算 |
 
-**核心因果链**：单卡放不下完整训练状态（DP+ZeRO）→ 单层/单个 GEMM 太大（TP）→ 层数太多、除以 TP 后仍超预算（PP）→ 吞吐不够（DP 复制）→ 序列太长（FlashAttention/SP/CP）→ 模型稀疏（MoE+EP）
+**核心因果链**：单卡放不下完整训练状态（DP+ZeRO）→ 单层/单个 GEMM 太大（TP）→ 层数太多、除以 TP 后仍超预算（PP）→ 吞吐不够（DP 复制）→ 序列太长（FlashAttention/SP/CP）→ 模型稀疏（MoE+EP）→ 不同训练阶段账本不同（08）→ 用统一口径验证通信量（09）
 
 ## 前置知识
 
 - 理解 All-Reduce 同步梯度的概念（[[01-基础篇/02-为什么不用多卡直接跑]]）
 - 了解单 GPU 的显存限制（[[01-基础篇/01-为什么单卡训练不够用]]）
 - 熟悉 NVLink 和跨机网络的区别（[[02-芯片篇/02-PCIe瓶颈与NVLink诞生]]）
+
+## 本篇未覆盖（后续可补）
+
+- **推理侧并行**：服务场景的 TP 常驻、MoE 的 EP、KV cache 分片、PD（prefill/decode）分离；
+- **容错与弹性**：万卡规模的 MTBF、异步 checkpoint、故障恢复对 wall-clock 的影响；
+- **拓扑感知映射**：rail-optimized 网络下的 rank 放置、EP 的机架内约束；
+- **确定性**：All-Reduce/All-to-All 的归约顺序对可复现性的影响（参见 Op 知识库的 determinism 契约）。
