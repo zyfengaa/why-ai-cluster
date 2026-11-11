@@ -10,10 +10,11 @@
 | [Q4: NVIDIA 收购 SchedMD 意味着什么？](04-NVIDIA收购SchedMD意味着什么.md) | 2025-12-15 收购 → Slinky（2024 开源）/SUNK 时间线 → 开源不变、方向需观察 |
 | [Q5: Gang Scheduling 是什么？](05-Gang%20Scheduling.md) | K8s 的 gang = 全组原子分配；Slurm 的 gang = 时间片轮转——两个概念分开写 |
 | [Q6: 拓扑感知调度为什么重要？](06-拓扑感知调度.md) | NVLink（900 GB/s 双向）vs PCIe 5.0（128 GB/s 双向）≈7× → 机内拓扑 + 机间 rail/leaf 两层 → `--switches` 与 DRA/亲和 |
+| [Q7: 调度器装好了，队列为什么还是排不好？](07-队列策略与GPU共享.md) | 四个旋钮：优先级/公平（FairShare 非平均分）、配额（QOS/TRES）、回填/预留、GPU 共享（MIG/MPS/time-slicing） |
 
 ## 一句话导读
 
-调度器解决的是"**几百个任务抢几千张卡时，谁先用、用哪些卡、怎么不打架**"。这一章按"为什么需要 → 两大阵营（Slurm/K8s）→ 两者融合（Slurm on K8s）→ 两个关键机制（gang scheduling、拓扑感知）"的顺序展开，全部命令和 YAML 均按真实 Slurm/Kubernetes 语法核对过。
+调度器解决的是"**几百个任务抢几千张卡时，谁先用、用哪些卡、怎么不打架**"。这一章按"为什么需要 → 两大阵营（Slurm/K8s）→ 两者融合（Slurm on K8s）→ 三个关键机制（gang scheduling、拓扑感知、队列与 GPU 共享）"的顺序展开，全部命令和 YAML 均按真实 Slurm/Kubernetes 语法核对过。
 
 ## 前置知识
 

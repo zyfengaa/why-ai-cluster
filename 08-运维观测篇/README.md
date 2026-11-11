@@ -4,14 +4,15 @@
 
 | Q&A | 核心链条 |
 |------|---------|
-| Q1: 集群监控到底要监控什么？ | 指标分层：MFU 为王，XID/ECC/NVLink 抓健康 |
-| Q2: 为什么 GPU 利用率 100% 不一定好？ | GPU-Util 是 kernel 执行时间占比，不是算力利用率 |
-| Q3: NCCL 调优到底在调什么？ | 算法/协议/信道 + 用对传输层，auto 优先 |
-| Q4: 为什么"慢节点"是大集群头号杀手？ | T_step = max_i(T_i)，灰节点难定位 |
-| Q5: 训练断了怎么办？ | Checkpoint 状态完整性 + 频率 + 原子性 + 弹性恢复 |
-| Q6: Profiling 工具怎么用？ | Nsight Systems → Nsight Compute → PyTorch Profiler |
+| [Q1: 集群监控到底要监控什么？](01-集群监控到底要监控什么.md) | 指标分层：MFU 为王，XID/ECC/NVLink 抓健康 |
+| [Q2: 为什么 GPU 利用率 100% 不一定好？](02-为什么GPU利用率100不一定好.md) | GPU-Util 是 kernel 执行时间占比，不是算力利用率 |
+| [Q3: NCCL 调优到底在调什么？](03-NCCL调优到底在调什么.md) | 算法/协议/信道 + 用对传输层，auto 优先 |
+| [Q4: 为什么"慢节点"是大集群头号杀手？](04-为什么说慢节点是大集群的头号杀手.md) | T_step = max_i(T_i)，灰节点难定位 |
+| [Q5: 训练断了怎么办？](05-训练断了怎么办.md) | Checkpoint 状态完整性 + 频率 + 原子性 + 弹性恢复 |
+| [Q6: Profiling 工具怎么用？](06-Profiling工具怎么用.md) | Nsight Systems → Nsight Compute → PyTorch Profiler |
+| [Q7: 万卡集群的监控数据放哪、怎么查？](07-可观测数据平台.md) | series 基数 → 本地+长期+降采样 → 标签设计 → 作业归因 |
 
-**核心因果链**：监控发现异常（GPU-Util 假忙 / MFU 低）→ 归因到通信与慢节点（NCCL 调优 + Straggler 检测）→ 故障终会发生（Checkpoint 恢复 + 弹性训练）→ 持续定位根因（Profiling 工具）
+**核心因果链**：规模上来先解决数据平台（基数/存储/归因）→ 监控发现异常（GPU-Util 假忙 / MFU 低）→ 归因到通信与慢节点（NCCL 调优 + Straggler 检测）→ 故障终会发生（Checkpoint 恢复 + 弹性训练）→ 持续定位根因（Profiling 工具）
 
 ## 阅读建议
 
