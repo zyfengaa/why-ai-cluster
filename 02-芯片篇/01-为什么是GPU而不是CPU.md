@@ -48,6 +48,42 @@ GPU 核心结构（简化）：
 
 **GPU 适合**：大规模并行计算、矩阵运算、SIMD（单指令多数据）。就像一个万名小学生组成的方阵——每个人只能算简单加减法，但一秒钟能算出一亿道。
 
+### 关键补充：算力表上的 TFLOPS 来自 Tensor Core
+
+前面说的“数千个 CUDA Core”是标量/向量单元。AI 算力表里的 **989 TFLOPS（H100 BF16 稠密）不是 CUDA Core 贡献的，而是 Tensor Core**：
+
+```
+CUDA Core 做 FP32 FMA：H100 约 67 TFLOPS
+Tensor Core 做 BF16 矩阵乘：H100 约 989 TFLOPS（稠密）
+两者相差约 15 倍——AI 训练吃的是后者。
+```
+
+一次 Tensor Core 指令完成一个小矩阵块的乘加（如 m16n8k16），多个 Tensor Core 在一个 SM 内并行，再由上百个 SM 并行——这才是深度学习算力爆发的来源。
+
+这也解释了三件事：
+
+- **精度越低，算力越高**：BF16 989 → FP8 1,979 → FP4（Blackwell）逐级翻倍，因为 Tensor Core 一次能吞吐更多低精度元素；
+- **矩阵形状重要**：Tensor Core 要求维度对齐（如 16 的倍数），小矩阵/不规则形状会退化成 CUDA Core 路径；
+- **“峰值”是稠密值**：稀疏（2:4）可以到 2 倍，但需要模型和 kernel 配合，不能直接拿来算 MFU。
+
+> 更细的指令形状与流水线见 NVIDIA Hopper / Blackwell 架构白皮书；这里只需记住：**算力表上的 TFLOPS 是 Tensor Core 的矩阵吞吐，不是 CUDA Core 的标量吞吐。**
+
+### 一个端到端算例：8B 模型的一次前向
+
+粗算 Llama 3 8B 在 batch=1、seq=2048 时的一次前向：
+
+```
+FLOPs ≈ 2 × N × tokens = 2 × 8×10⁹ × 2,048 ≈ 3.3×10¹³
+
+H100 BF16 稠密 989 TFLOPS、按 40% MFU → 约 4.0×10¹⁴ FLOP/s
+→ 前向约 0.08 s
+
+双路 64 核 Xeon、AVX-512 BF16 峰值约 5 TFLOPS、按 50% → 约 2.5×10¹² FLOP/s
+→ 前向约 13 s
+```
+
+**单次前向差约 150 倍**；训练时反向约为前向的 2 倍，差距同量级。这个算例说明的不是“GPU 什么都快”，而是“矩阵负载下，GPU 的 Tensor Core 路径和 CPU 的向量路径不在一个量级”。
+
 ---
 
 ## 具体数字对比
@@ -152,7 +188,7 @@ nvidia-smi --query-gpu=name,compute_cap,memory.total,temperature.gpu \
   - **实际**：TFLOPS 是峰值算力（引用时务必区分稠密/稀疏——稀疏是稠密的 2 倍），实际能用到多少取决于**内存带宽**和**数据流水线**。H100 的稠密 FP16 峰值约 989 TFLOPS，但实际训练 LLM 时 MFU（模型算力利用率）通常在 30-50%。瓶颈往往在**显存带宽**（H100 3.35 TB/s）而不是算力本身。这就是为什么 HBM 带宽比算力更关键。
 
 - **误区**："AMD MI300X 的 FP16 峰值算力比 H100 高，所以训练更快"
-  - **实际**：微基准测试可以接近或超过 H100，但**端到端训练性能不等于微基准**——取决于模型、框架、算子覆盖和互联。MI300X 与 H100 的真实训练差距通常在 20-40% 量级（不同模型/框架差异很大），主要差在 ROCm 软件栈和集群互联。**硬件峰值只是纸面数字，软件生态和工程实现同样重要。**
+  - **实际**：微基准测试可以接近或超过 H100，但**端到端训练性能不等于微基准**——取决于模型、框架、算子覆盖和互联。MI300X 与 H100 的真实训练差距常见经验区间约 20-40%（不同模型/框架差异很大，**需用自有负载实测**，不构成精确承诺），主要差在 ROCm 软件栈和集群互联。**硬件峰值只是纸面数字，软件生态和工程实现同样重要。**
 
 ### 📊 底线数字速查
 
@@ -187,5 +223,7 @@ nvidia-smi --query-gpu=name,compute_cap,memory.total,temperature.gpu \
 > **参考资料**：
 > - [NVIDIA H100 官方规格页](https://www.nvidia.com/en-us/data-center/h100/) — CUDA Core 数、TFLOPS（稠密/稀疏）、HBM 带宽
 > - [NVIDIA Hopper 架构深度解析（NVIDIA Developer Blog）](https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/)
+> - [NVIDIA Hopper Architecture Technical Brief（Tensor Core 指令形状）](https://resources.nvidia.com/en-us-tensor-core/gtc22-whitepaper-hopper)
+> - [NVIDIA Blackwell Architecture Technical Brief（FP4/FP8 Tensor Core）](https://resources.nvidia.com/en-us-blackwell-architecture)
 > - [NVIDIA CUDA C++ Programming Guide](https://docs.nvidia.com/cuda/cuda-c-programming-guide/) — Compute Capability 与各代硬件特性对照
 > - [NVIDIA DGX B200 页面（Blackwell）](https://www.nvidia.com/en-us/data-center/dgx-b200/)

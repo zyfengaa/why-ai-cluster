@@ -121,8 +121,8 @@ def compute_mfu(num_flops_per_step, step_time_seconds, num_gpus):
 # num_flops_per_step ≈ 6 × (70×10^9) × (1024 × 4096) ≈ 1.76e18
 # 实测 step_time = 4.3 s
 # 集群实际算力 = 1.76e18 / 4.3 ≈ 4.1e17 FLOPs/s
-# 理论峰值    = 1024 × 989e12 ≈ 1.01e15 FLOPs/s
-# MFU = 4.1e17 / 1.01e15 ≈ 40%
+# 理论峰值    = 1024 × 989e12 ≈ 1.01e18 FLOPs/s
+# MFU = 4.1e17 / 1.01e18 ≈ 40%
 #
 # 注意先做量纲检查：如果算出来的 MFU > 100%，说明你的 FLOPs 数或峰值口径错了
 # （比如误用了稀疏峰值，或者把乘了 2 倍的 FLOPs 又乘了一遍）

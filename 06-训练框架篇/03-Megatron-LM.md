@@ -53,6 +53,56 @@ MLP 前向（W1 列切分、W2 行切分）：
 
 Megatron-Core 是 Llama 3 等公开大模型训练的参考实现之一。公开报告的 MFU 大致在 **38–43%**（如 Meta Llama 3 405B）；不同模型/配置差异很大，不要把任何单一数字当成"Megatron 的 MFU"直接套用。
 
+### DualPipe：PP 气泡的工程解法
+
+PP=16 时，1F1B 的气泡率约 `(16−1)/(M+15)`；即使 M=64 也有约 19%。DeepSeek-V3 用 **DualPipe** 把前向和反向拆成两个方向同时流动，让一个 microbatch 的前向与另一个的反向互相填空：
+
+```
+1F1B：      F0 F1 F2 ... | B0 B1 ...
+DualPipe：  正向流 F0 F1 ... 与反向流 B0 B1 ... 同时推进
+            一个方向在算，另一个方向在通信/等待 → 互补
+```
+
+代价：需要双份激活缓冲、调度器更复杂、对 PP 两端有额外要求。它**不是 Megatron-Core 上游的默认调度**（上游提供 1F1B 与 interleaved 1F1B）；要用需要 DeepSeek 开源代码、MindSpeed 等分支或第三方实现。
+
+### MoE 训练的 5D 配置长什么样
+
+以 DeepSeek-V3（671B 总参 / 37B 激活、256 专家、61 层）在 2,048×H800 上的公开配置为例：
+
+```
+TP=1, PP=16, EP=64, DP_experts=2
+world = 1 × 16 × 64 × 2 = 2,048
+每卡训练状态 ≈ 671B × 16 B ÷ (1×16×64) ≈ 10.5 GB
+```
+
+关键点：**TP=1**，省显存靠 EP；**PP=16** 配 DualPipe 压气泡；**EP=64** 跨 8 个节点（每卡 4 个专家）。这和稠密模型"TP=8 起步"的直觉相反——MoE 的参数大头在专家层，EP 才是正确的分片维度。
+
+### 激活显存：Megatron 账本的第二页
+
+训练状态之外，激活是独立的第二本账。按 Korthikanti 等人的口径，每层每 token 的激活约 `34 × H × bytes`（未做序列并行/重算时）：
+
+```
+70B、H=8192、BF16：
+  每层每 token ≈ 34 × 8192 × 2 B ≈ 0.56 MB
+
+4×4096 = 16,384 tokens、80 层：
+  全模型激活 ≈ 0.56 MB × 16,384 × 80 ≈ 730 GB
+
+TP=8 × PP=4 后每卡约 23 GB；开激活重算后可降到几 GB 量级。
+```
+
+这解释了为什么 70B 在 TP=8 时每卡仍要 140 GB 训练状态——**激活是另外加上去的**，而且长序列/大 batch 会让它迅速超过模型状态。Megatron 的 `--recompute-*` 系列参数、SP/CP 都是针对这第二本账的。
+
+### Checkpoint：分片布局也是训练状态的一部分
+
+Megatron 的分布式 checkpoint 要同时保存：
+
+- 模型分片（TP×PP×EP 的布局）；
+- 优化器分片（ZeRO-1/2 后的状态）；
+- 数据加载器位置与 RNG（保证恢复后数据顺序一致）。
+
+换并行度恢复时，用 DCP 的 load-time reshard；Megatron 自身提供分布式 checkpoint 相关参数（以主线 `--help` 为准，如 `--use-distributed-checkpoint`），但**改 EP/TP 布局后的恢复一定要做一次演练**，不要假设"存得下就一定能读回来"。
+
 ---
 
 ## 优缺点
@@ -129,6 +179,9 @@ Megatron-Core 是"重装"，FSDP2 就是"轻骑"。对于大多数微调场景�
 > - [Shoeybi et al., "Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism" (2019)](https://arxiv.org/abs/1909.08053)
 > - [NVIDIA/Megatron-LM GitHub（含 Megatron-Core）](https://github.com/NVIDIA/Megatron-LM)
 > - ["MoE Parallel Folding: Heterogeneous Parallelism Mappings for Efficient Large-Scale MoE Model Training with Megatron Core" (2025)](https://arxiv.org/abs/2504.14960)
+> - [DeepSeek-AI, "DeepSeek-V3 Technical Report"（PP=16 / EP=64 / DualPipe 公开配置）](https://arxiv.org/abs/2412.19437)
+> - [DeepSeek-V3 GitHub（DualPipe 参考实现）](https://github.com/deepseek-ai/DeepSeek-V3)
+> - [Korthikanti et al., "Reducing Activation Recomputation in Large Transformer Models"（激活显存口径）](https://arxiv.org/abs/2205.05198)
 > - [Megatron-Core 官方开发者文档](https://docs.nvidia.com/megatron-core/developer-guide/latest/user-guide/index.html)
 > - [NVIDIA NeMo 框架文档](https://docs.nvidia.com/nemo-framework/)
 > - [PyPI: megatron-core](https://pypi.org/project/megatron-core/)

@@ -57,8 +57,9 @@
 
 ### 互联
 
-| 技术 | 每卡/端口带宽 | 说明 |
-|------|--------------|------|
+| 技术 | 带宽（口径见说明） | 说明 |
+|------|------------------|------|
+| DDR5-6400 | **51.2 GB/s 单通道；102.4 GB/s 双通道** | 主机内存带宽；不是 64 GB/s |
 | PCIe 5.0 x16 | **64 GB/s 单向，128 GB/s 双向** | PCIe 4.0 为 32 / 64 GB/s |
 | NVLink 4（H100） | **900 GB/s 双向** | 18 link × 50 GB/s |
 | NVLink 5（Blackwell） | **1.8 TB/s 双向** | 18 link × 100 GB/s |
@@ -79,6 +80,7 @@
 - Ring All-Reduce：**reduce-scatter N−1 步 + all-gather N−1 步 = 2(N−1) 步**；每卡通信量 `2S(N−1)/N ≈ 2S`，**与 N 基本无关**；耗时 `T ≈ 2S(N−1)/(N·B)`。
 - Tree All-Reduce：时延 `O(log N)`，不是 Ring 的「对数增长」；Ring 时延 `O(N)`。
 - 单卡 All-Reduce 实测带宽：单机 8×H200 NVLink 可达 **>400 GB/s**（busbw 口径）；跨机 IB NDR 每卡 **~40–50 GB/s**（受单端口 50 GB/s 限制），不是 80 GB/s。
+- 跨机 RoCEv2 400G 每卡 busbw：**调优后 ~40–48 GB/s；未调优常见 25–35 GB/s**。全书以此为唯一基线，不再分两套数字。
 - IB 子网：16-bit LID，单播 LID 约 **4.8 万个**，不是「理论无限」；扩展靠 subnet router。
 - RoCEv2 不是 TCP，没有「TCP 回退」；ECN/PFC 负责无损，不负责链路故障检测。
 - 大集群不是「几乎都用 IB」：Meta Llama 3 有一套 RoCEv2 集群；xAI Colossus 用 Spectrum-X 以太网；Google 用 ICI；AWS 用 EFA。
@@ -91,7 +93,7 @@
 - 1,000 GPU = 125 台 8 卡服务器；每台 8×400G = 3.2 Tb/s。
 - 聚合网络带宽 = 125 × 3.2 = **400 Tb/s**；1:1 非阻塞时对分带宽约 **200 Tb/s**。
 - 64 端口 400G 交换机：64 × 400 Gb/s = **25.6 Tb/s** 交换容量。
-- 1:1 无收敛叶脊：32 下联 / 32 上联 → 需要 **32 台 leaf、16 台 spine**（每 leaf 上联 16 台 spine 各 1 链路），不是 50 leaf / 8 spine。
+- 1:1 无收敛叶脊：32 下联 / 32 上联 → 需要 **32 台 leaf、16 台 spine**（每 leaf 上联 16 台 spine、每对 **2 条链路**），不是 50 leaf / 8 spine。
 
 ---
 
@@ -199,3 +201,56 @@
 2. 优先顺序：官方文档 / 官方博客 / 论文 arXiv / 厂商规格页 / 权威工程博客。
 3. 不引用无法核验的第三方聚合站；不确定的 URL 先用 WebFetch 验证，返回 404 就换。
 4. 正文中的关键数字，尽量在同一段或参考资料中给出可核验来源。
+
+---
+
+## 9. 关键来源索引
+
+本表是全书数字的**可核验来源入口**；正文引用具体数字时，优先回到这里找原始出处。
+
+### 硬件与互联
+
+- [NVIDIA H100 官方规格页](https://www.nvidia.com/en-us/data-center/h100/) — H100 SXM/PCIe 算力、显存、NVLink
+- [NVIDIA H200 官方规格页](https://www.nvidia.com/en-us/data-center/h200/) — 141 GB HBM3e
+- [NVIDIA B200 / DGX B200 页面](https://www.nvidia.com/en-us/data-center/dgx-b200/) — Blackwell 算力与显存
+- [NVIDIA GB300 NVL72 官方规格页](https://www.nvidia.com/en-us/data-center/gb300-nvl72/) — 整柜功耗与 DLC 要求
+- [NVIDIA Hopper 架构白皮书](https://resources.nvidia.com/en-us-tensor-core/gtc22-whitepaper-hopper) — Tensor Core / NVLink 4
+- [NVIDIA Blackwell 架构白皮书](https://resources.nvidia.com/en-us-blackwell-architecture) — NVLink 5 / FP4
+- [NVIDIA DGX H100 用户指南](https://docs.nvidia.com/dgx/dgxh100-user-guide/) — NVSwitch 与 8 卡拓扑
+
+### 网络
+
+- [Slurm：Large Cluster Administration Guide（65,536 节点口径）](https://slurm.schedmd.com/big_sys.html)
+- [Slurm：Multifactor Job Priority](https://slurm.schedmd.com/priority_multifactor.html)
+- [NCCL 用户指南](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/) — 集合通信与环境变量
+- [nccl-tests](https://github.com/NVIDIA/nccl-tests) — busbw/algbw 口径
+- [Ultra Ethernet Consortium](https://ultraethernet.org/) — UEC 1.0 规范
+- [UALink Consortium](https://ualinkconsortium.org/) — UALink 1.0（100 GB/s 单向/端口）
+- [NVIDIA Spectrum-X](https://www.nvidia.com/en-us/networking/spectrumx/) — 以太网 AI 网络
+
+### 调度与 Kubernetes
+
+- [Kubernetes：DRA（Dynamic Resource Allocation）](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/)
+- [Kueue 官方文档](https://kueue.sigs.k8s.io/docs/) — ClusterQueue / cohort / 借用
+- [Volcano 官方文档](https://volcano.sh/en/docs/) — PodGroup / gang
+- [NVIDIA KAI Scheduler](https://github.com/NVIDIA/KAI-Scheduler)
+- [NVIDIA 收购 SchedMD 公告](https://blogs.nvidia.com/blog/nvidia-acquires-schedmd/)
+- [Slinky 项目](https://slinky.ai) — Slurm on Kubernetes
+
+### 框架与 checkpoint
+
+- [PyTorch FSDP 文档](https://pytorch.org/docs/stable/fsdp.html)
+- [PyTorch Distributed Checkpoint](https://docs.pytorch.org/docs/stable/distributed.checkpoint.html)
+- [DeepSpeed 官方文档](https://www.deepspeed.ai/)
+- [Megatron-Core 文档](https://docs.nvidia.com/megatron-core/)
+- [DeepSeek-V3 Technical Report](https://arxiv.org/abs/2412.19437) — PP=16 / EP=64 / DualPipe
+- [Llama 3 Herd of Models](https://arxiv.org/abs/2407.21783) — 24,576 卡 / 419 次中断 / MFU
+
+### 集群案例与前沿
+
+- [Meta：Building Meta's GenAI Infrastructure](https://engineering.fb.com/2024/03/12/data-infrastructure/building-metas-genai-infrastructure/)
+- [xAI Colossus](https://x.ai/news/colossus)
+- [Google Cloud：Ironwood TPU](https://cloud.google.com/blog/topics/systems-innovation/announcing-trillium-next-generation-tpu-ironwood)
+- [OpenAI：Announcing The Stargate Project](https://openai.com/index/announcing-the-stargate-project/)
+- [CXL Consortium](https://computeexpresslink.org/about-cxl/)
+- [Open Compute Project](https://www.opencompute.org/) — 机架/供电/冷却规范
